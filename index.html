@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Periscope Strategy · מסדר הלו"ז האופטימלי</title>
+<meta name="description" content="מסדר לו&quot;ז אימונים שבועי לסימולטור: מזינים דרישות, מקבלים לוח שבועי אופטימלי.">
+<meta name="theme-color" content="#1f2f3c">
+<meta name="color-scheme" content="dark light">
+<meta property="og:title" content="Periscope Strategy · מסדר הלו&quot;ז האופטימלי">
+<meta property="og:description" content="שיבוץ אימונים שבועי לסימולטור">
+<meta property="og:image" content="https://idoravid15-art.github.io/sidor_talya/assets/brand/og-image.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/brand/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&display=swap">
+<link rel="stylesheet" href="css/app.css">
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">דילוג לתוכן</a>
+<div class="sonar-bg" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-logo" src="assets/brand/logo-horizontal.svg" alt="Periscope Strategy" width="219" height="48">
+    <img class="brand-logo-print" src="assets/brand/logo-mono.svg" alt="Periscope Strategy" width="219" height="48">
+    <span class="brand-tag">מסדר הלו"ז האופטימלי</span>
+  </div>
+  <div class="topbar-actions">
+    <span class="save-state" id="saveState" aria-live="polite"></span>
+    <button type="button" class="btn btn-ghost btn-sm" id="resetBtn">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v5h5"/></svg>
+      איפוס
+    </button>
+  </div>
+</header>
+
+<nav class="stepper" aria-label="שלבים">
+  <ol>
+    <li><button type="button" class="step" data-step="1"><span class="step-num">1</span><span class="step-label">דרישות השבוע</span></button></li>
+    <li><button type="button" class="step" data-step="2"><span class="step-num">2</span><span class="step-label">אימונים קבועים</span></button></li>
+    <li><button type="button" class="step" data-step="3"><span class="step-num">3</span><span class="step-label">הגדרות</span></button></li>
+    <li><button type="button" class="step" data-step="4"><span class="step-num">4</span><span class="step-label">הלו"ז</span></button></li>
+  </ol>
+</nav>
+
+<main id="main" tabindex="-1">
+
+  <!-- STEP 1 -->
+  <section class="screen" id="screen-1" data-screen="1" aria-labelledby="h1">
+    <div class="screen-head">
+      <h1 id="h1">דרישות השבוע</h1>
+      <p class="lead">כמה שעות צריך מכל סוג אימון השבוע? הסדר כאן הוא סדר העדיפות.</p>
+    </div>
+    <div class="capacity panel" id="capacity">
+      <div class="capacity-top">
+        <h2 class="panel-title">מד קיבולת</h2>
+        <span class="capacity-status" id="capStatus"></span>
+      </div>
+      <div class="meter" id="capMeter" role="meter" aria-labelledby="capText" aria-valuemin="0">
+        <div class="meter-fill" id="capFill"></div>
+        <div class="meter-ticks" aria-hidden="true"></div>
+      </div>
+      <p class="capacity-text" id="capText"></p>
+    </div>
+    <div class="type-grid" id="typeGrid"></div>
+    <div class="screen-nav">
+      <button type="button" class="btn btn-primary" data-go="2">המשך לאימונים קבועים <span aria-hidden="true">←</span></button>
+    </div>
+  </section>
+
+  <!-- STEP 2 -->
+  <section class="screen" id="screen-2" data-screen="2" aria-labelledby="h2" hidden>
+    <div class="screen-head">
+      <h1 id="h2">אימונים חריגים קבועים</h1>
+      <p class="lead">אימונים שכבר נקבעו מראש. הם ישובצו ראשונים והשאר ייבנה סביבם.</p>
+    </div>
+    <div class="fixed-layout">
+      <form class="panel fixed-form" id="fixedForm" novalidate>
+        <h2 class="panel-title">הוספת אימון קבוע</h2>
+        <div class="form-grid">
+          <label class="field"><span>יום</span><select name="day" id="fxDay"></select></label>
+          <label class="field"><span>שעת התחלה</span><select name="start" id="fxStart"></select></label>
+          <label class="field"><span>משך</span><select name="duration" id="fxDur"></select></label>
+          <label class="field"><span>מאמנת</span><select name="trainerId" id="fxTrainer"></select></label>
+          <label class="field field-wide"><span>סוג אימון</span><select name="typeId" id="fxType"></select></label>
+          <label class="field field-wide" id="fxLabelWrap" hidden><span>תווית</span><input name="label" id="fxLabel" type="text" maxlength="40" placeholder="למשל: ביקור מפקד"></label>
+        </div>
+        <p class="form-error" id="fxError" role="alert"></p>
+        <button type="submit" class="btn btn-primary btn-block">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>הוספה
+        </button>
+      </form>
+      <div class="panel fixed-list-panel">
+        <h2 class="panel-title">אימונים קבועים <span class="count" id="fixedCount"></span></h2>
+        <ul class="fixed-list" id="fixedList" aria-live="polite"></ul>
+        <p class="empty" id="fixedEmpty">אין אימונים קבועים. אפשר לדלג לשלב הבא.</p>
+      </div>
+    </div>
+    <div class="screen-nav">
+      <button type="button" class="btn btn-ghost" data-go="1"><span aria-hidden="true">→</span> חזרה</button>
+      <button type="button" class="btn btn-primary" data-go="3">המשך להגדרות <span aria-hidden="true">←</span></button>
+    </div>
+  </section>
+
+  <!-- STEP 3 -->
+  <section class="screen" id="screen-3" data-screen="3" aria-labelledby="h3" hidden>
+    <div class="screen-head">
+      <h1 id="h3">הגדרות</h1>
+      <p class="lead">ברירות המחדל מתאימות לרוב השבועות. משנים רק מה שצריך.</p>
+    </div>
+    <div class="settings-grid">
+      <fieldset class="panel">
+        <legend class="panel-title">מאמנות</legend>
+        <label class="field"><span>מאמנת ראשונה</span><input type="text" id="tName0" maxlength="20" autocomplete="off"></label>
+        <label class="field"><span>מאמנת שנייה</span><input type="text" id="tName1" maxlength="20" autocomplete="off"></label>
+      </fieldset>
+
+      <fieldset class="panel">
+        <legend class="panel-title">אפטר</legend>
+        <p class="hint">מאמנת אחת, ערב אחד: אין אימונים מ-<span id="afterEndTxt">17:00</span> ועד <span id="afterRetTxt">10:30</span> למחרת.</p>
+        <div class="seg" role="radiogroup" aria-label="קביעת אפטר">
+          <label><input type="radio" name="afterMode" value="auto"><span>אוטומטי</span></label>
+          <label><input type="radio" name="afterMode" value="manual"><span>אני בוחרת</span></label>
+        </div>
+        <div class="form-grid" id="afterManual">
+          <label class="field"><span>מאמנת</span><select id="afterTrainer"></select></label>
+          <label class="field"><span>יום</span><select id="afterDay"></select></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="panel">
+        <legend class="panel-title">יש"פ + ניקיון</legend>
+        <p class="hint">שעה אחת בשבוע בלי אימונים.</p>
+        <div class="seg" role="radiogroup" aria-label="קביעת יש&quot;פ">
+          <label><input type="radio" name="cleanMode" value="auto"><span>אוטומטי</span></label>
+          <label><input type="radio" name="cleanMode" value="manual"><span>אני בוחרת</span></label>
+        </div>
+        <div class="form-grid" id="cleanManual">
+          <label class="field"><span>יום</span><select id="cleanDay"></select></label>
+          <label class="field"><span>שעה</span><select id="cleanStart"></select></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="panel">
+        <legend class="panel-title">חלון חמישי</legend>
+        <label class="switch">
+          <input type="checkbox" id="thuEnabled" role="switch">
+          <span class="switch-track" aria-hidden="true"></span>
+          <span>להשאיר חלון פנוי בחמישי <span class="nowrap" id="thuTxt">12:00-12:30</span></span>
+        </label>
+        <p class="hint">החלון יישבר רק אם זה מוסיף יותר מ-<span id="thuTradeTxt">30</span> דק' אימון בשבוע.</p>
+      </fieldset>
+
+      <details class="panel advanced" id="advanced">
+        <summary><span class="panel-title">חוקים מתקדמים</span><span class="hint">משכים, מנוחה, שינה ומכסות</span></summary>
+        <div class="form-grid adv-grid" id="advGrid"></div>
+        <button type="button" class="btn btn-ghost btn-sm" id="advReset">החזרת חוקים לברירת מחדל</button>
+      </details>
+    </div>
+    <div class="screen-nav">
+      <button type="button" class="btn btn-ghost" data-go="2"><span aria-hidden="true">→</span> חזרה</button>
+      <button type="button" class="btn btn-primary" data-go="4" data-build>בנה לו"ז <span aria-hidden="true">←</span></button>
+    </div>
+  </section>
+
+  <!-- STEP 4 -->
+  <section class="screen" id="screen-4" data-screen="4" aria-labelledby="h4" hidden>
+    <div class="screen-head result-head">
+      <div>
+        <h1 id="h4">הלו"ז השבועי</h1>
+        <p class="lead" id="resultLead">לחצי "בנה לו"ז" כדי לקבל לוח שבועי.</p>
+      </div>
+      <div class="toolbar" role="toolbar" aria-label="פעולות על הלו&quot;ז">
+        <button type="button" class="btn btn-primary" id="buildBtn">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+          <span id="buildLabel">בנה לו"ז</span>
+        </button>
+        <div class="export-group" id="exportGroup">
+          <button type="button" class="btn btn-ghost" id="printBtn" disabled>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z"/></svg>הדפסה / PDF</button>
+          <button type="button" class="btn btn-ghost" id="pngBtn" disabled>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-8 8"/></svg>תמונה לוואטסאפ</button>
+          <button type="button" class="btn btn-ghost" id="xlsxBtn" disabled>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/></svg>אקסל</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="sr-only" id="buildStatus" role="status" aria-live="polite"></p>
+
+    <div class="scan panel" id="scan" hidden>
+      <div class="scope" aria-hidden="true">
+        <svg viewBox="0 0 200 200" class="scope-svg">
+          <defs>
+            <radialGradient id="scopeBg" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#22394a"/><stop offset="1" stop-color="#15222c"/></radialGradient>
+          </defs>
+          <g class="scope-gear"><circle cx="100" cy="100" r="94" fill="none" stroke="#2f7fd0" stroke-width="6" stroke-dasharray="9 5.76"/></g>
+          <circle cx="100" cy="100" r="86" fill="url(#scopeBg)" stroke="#13202b" stroke-width="3"/>
+          <g fill="none" stroke="#5aa7ef" stroke-opacity=".28">
+            <circle cx="100" cy="100" r="64"/><circle cx="100" cy="100" r="42"/><circle cx="100" cy="100" r="20"/>
+            <path d="M100 14v172M14 100h172"/>
+          </g>
+          <g class="scope-sweep"><path d="M100 100 L100 14 A86 86 0 0 1 160.8 39.2 Z" fill="url(#sweepGrad)"/></g>
+          <linearGradient id="sweepGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#f0962e" stop-opacity="0"/><stop offset="1" stop-color="#f0962e" stop-opacity=".45"/></linearGradient>
+          <g class="scope-blips" fill="#f0962e"><circle cx="132" cy="70" r="3"/><circle cx="76" cy="128" r="2.5"/><circle cx="120" cy="140" r="2"/><circle cx="62" cy="64" r="2"/></g>
+          <g stroke="#f0962e" stroke-width="2"><path d="M100 4v12M100 184v12M4 100h12M184 100h12"/></g>
+        </svg>
+        <span class="scope-pct" id="scanPct">0%</span>
+      </div>
+      <div class="scan-info">
+        <p class="scan-title">סורקת אפשרויות שיבוץ…</p>
+        <p class="scan-sub" id="scanSub">מסדרת את האימונים לפי עדיפות</p>
+        <div class="progress" aria-hidden="true"><div class="progress-fill" id="scanFill"></div></div>
+      </div>
+    </div>
+
+    <div class="result" id="result" hidden>
+      <div class="panel board-panel">
+        <div class="board-head">
+          <h2 class="panel-title">לוח שבועי</h2>
+          <ul class="legend" id="legend" aria-label="מקרא"></ul>
+        </div>
+        <div class="day-tabs" role="tablist" aria-label="ימים" id="dayTabs"></div>
+        <div class="board" id="board"></div>
+      </div>
+      <div class="summary">
+        <div class="panel util-panel">
+          <h2 class="panel-title">ניצול הסימולטור</h2>
+          <div class="util" id="util"></div>
+        </div>
+        <div class="panel gauges-panel">
+          <h2 class="panel-title">נדרש מול שובץ</h2>
+          <ul class="gauges" id="gauges"></ul>
+        </div>
+        <div class="panel warn-panel" id="warnPanel">
+          <h2 class="panel-title">שימי לב</h2>
+          <ul class="warnings" id="warnings"></ul>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="empty-state panel" id="emptyState">
+      <img src="assets/brand/emblem.svg" alt="" width="96" height="96">
+      <p>הכל מוכן. לחיצה על <strong>בנה לו"ז</strong> תסדר את השבוע.</p>
+    </div>
+
+    <div class="screen-nav">
+      <button type="button" class="btn btn-ghost" data-go="3"><span aria-hidden="true">→</span> חזרה להגדרות</button>
+    </div>
+  </section>
+</main>
+
+<dialog class="dialog" id="confirmDlg" aria-labelledby="dlgTitle">
+  <form method="dialog">
+    <h2 id="dlgTitle">לאפס הכל?</h2>
+    <p>כל הדרישות, האימונים הקבועים וההגדרות יחזרו לברירת המחדל. אי אפשר לבטל.</p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" value="cancel">ביטול</button>
+      <button class="btn btn-danger" value="ok">איפוס</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<noscript><p class="noscript">האפליקציה דורשת JavaScript.</p></noscript>
+</body>
+</html>

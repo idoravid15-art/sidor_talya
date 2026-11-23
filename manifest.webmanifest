@@ -1,0 +1,19 @@
+{
+  "name": "Periscope Strategy · מסדר הלו\"ז האופטימלי",
+  "short_name": "Periscope",
+  "description": "מסדר לו\"ז אימונים שבועי לסימולטור",
+  "lang": "he",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1f2f3c",
+  "theme_color": "#1f2f3c",
+  "icons": [
+    { "src": "assets/brand/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/brand/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/brand/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "assets/brand/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

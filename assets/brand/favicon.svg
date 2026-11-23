@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<title>Periscope Strategy</title>
+<defs><linearGradient id="fg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5aa7ef"/><stop offset="1" stop-color="#1d5a9e"/></linearGradient></defs>
+<path d="M217.6 54.6L224.7 8.0L287.3 8.0L294.4 54.6A205 205 0 0 1 343.3 70.5L376.4 36.9L427.1 73.8L405.4 115.7A205 205 0 0 1 435.6 157.2L482.2 149.6L501.6 209.2L459.4 230.3A205 205 0 0 1 459.4 281.7L501.6 302.8L482.2 362.4L435.6 354.8A205 205 0 0 1 405.4 396.3L427.1 438.2L376.4 475.1L343.3 441.5A205 205 0 0 1 294.4 457.4L287.3 504.0L224.7 504.0L217.6 457.4A205 205 0 0 1 168.7 441.5L135.6 475.1L84.9 438.2L106.6 396.3A205 205 0 0 1 76.4 354.8L29.8 362.4L10.4 302.8L52.6 281.7A205 205 0 0 1 52.6 230.3L10.4 209.2L29.8 149.6L76.4 157.2A205 205 0 0 1 106.6 115.7L84.9 73.8L135.6 36.9L168.7 70.5A205 205 0 0 1 217.6 54.6Z" fill="url(#fg)" stroke="#13202b" stroke-width="14"/>
+<circle cx="256" cy="256" r="168" fill="#1f2f3c" stroke="#13202b" stroke-width="12"/>
+<g fill="none" stroke="#f0962e" stroke-width="26" stroke-linecap="round"><path d="M182.6 360.9A128 128 0 0 1 182.6 151.1 M329.4 151.1A128 128 0 0 1 329.4 360.9"/></g>
+<rect x="226" y="220" width="60" height="170" rx="14" fill="#2f7fd0" stroke="#13202b" stroke-width="10"/>
+<circle cx="256" cy="170" r="70" fill="#2f7fd0" stroke="#13202b" stroke-width="12"/>
+<circle cx="256" cy="170" r="44" fill="#f0962e" stroke="#13202b" stroke-width="8"/>
+<circle cx="256" cy="173" r="22" fill="#13202b"/>
+</svg>

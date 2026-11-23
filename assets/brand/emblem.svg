@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<title>Periscope Strategy</title>
+<defs>
+  <linearGradient id="eg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5aa7ef"/><stop offset=".55" stop-color="#2f7fd0"/><stop offset="1" stop-color="#1d5a9e"/></linearGradient>
+  <linearGradient id="et" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#1d5a9e"/><stop offset=".35" stop-color="#6fb4f3"/><stop offset=".6" stop-color="#2f7fd0"/><stop offset="1" stop-color="#1a4f8c"/></linearGradient>
+  <radialGradient id="el" cx=".4" cy=".35" r=".7"><stop offset="0" stop-color="#ffc27a"/><stop offset=".6" stop-color="#f0962e"/><stop offset="1" stop-color="#b8661a"/></radialGradient>
+  <radialGradient id="ed" cx=".5" cy=".4" r=".7"><stop offset="0" stop-color="#2c3e4c"/><stop offset="1" stop-color="#16222d"/></radialGradient>
+</defs>
+<path d="M225.9 52.2L233.2 15.1L278.8 15.1L286.1 52.2A206 206 0 0 1 331.8 64.5L356.7 36.0L396.2 58.7L384.0 94.6A206 206 0 0 1 417.4 128.0L453.3 115.8L476.0 155.3L447.5 180.2A206 206 0 0 1 459.8 225.9L496.9 233.2L496.9 278.8L459.8 286.1A206 206 0 0 1 447.5 331.8L476.0 356.7L453.3 396.2L417.4 384.0A206 206 0 0 1 384.0 417.4L396.2 453.3L356.7 476.0L331.8 447.5A206 206 0 0 1 286.1 459.8L278.8 496.9L233.2 496.9L225.9 459.8A206 206 0 0 1 180.2 447.5L155.3 476.0L115.8 453.3L128.0 417.4A206 206 0 0 1 94.6 384.0L58.7 396.2L36.0 356.7L64.5 331.8A206 206 0 0 1 52.2 286.1L15.1 278.8L15.1 233.2L52.2 225.9A206 206 0 0 1 64.5 180.2L36.0 155.3L58.7 115.8L94.6 128.0A206 206 0 0 1 128.0 94.6L115.8 58.7L155.3 36.0L180.2 64.5A206 206 0 0 1 225.9 52.2Z" fill="url(#eg)" stroke="#13202b" stroke-width="10" stroke-linejoin="round"/>
+<circle cx="256" cy="256" r="172" fill="url(#ed)" stroke="#13202b" stroke-width="10"/>
+<circle cx="256" cy="256" r="160" fill="none" stroke="#3b5468" stroke-width="2" opacity=".8"/>
+<g fill="none" stroke="#f0962e" stroke-width="15" stroke-linecap="round">
+  <path d="M186.5 386.7A148 148 0 0 1 186.5 125.3 M325.5 125.3A148 148 0 0 1 325.5 386.7 M200.6 360.2A118 118 0 0 1 200.6 151.8 M311.4 151.8A118 118 0 0 1 311.4 360.2"/><path d="M108 262H138 M374 262H404"/>
+</g>
+<path d="M230 214V368Q230 382 244 382H268Q282 382 282 368V214Z" fill="url(#et)" stroke="#13202b" stroke-width="8" stroke-linejoin="round"/>
+<rect x="250" y="222" width="5" height="148" rx="2.5" fill="#cfe6ff" opacity=".55"/>
+<path d="M232 300H280" stroke="#13202b" stroke-width="6"/>
+<circle cx="256" cy="158" r="58" fill="url(#eg)" stroke="#13202b" stroke-width="10"/>
+<circle cx="256" cy="158" r="38" fill="url(#el)" stroke="#13202b" stroke-width="6"/>
+<circle cx="256" cy="161" r="19" fill="#13202b"/>
+<circle cx="248" cy="151" r="6.5" fill="#fff" opacity=".9"/>
+</svg>
