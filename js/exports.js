@@ -18,7 +18,7 @@ function scheduleRows(result, config) {
   const { types, trainers } = config;
   const rows = [];
   for (const s of [...result.sessions].sort((a, b) => a.start - b.start)) {
-    const notes = [s.fixed && 'קבוע', s.short && 'מקוצר', s.offHours && 'מחוץ לשעות המועדפות'].filter(Boolean).join(', ');
+    const notes = [s.series ? 'סדרות' : s.fixed && 'קבוע', s.short && 'מקוצר', s.offHours && 'מחוץ לשעות המועדפות'].filter(Boolean).join(', ');
     rows.push([DAY_NAMES[Math.floor(s.start / 1440)] ?? '', hhmm(s.start), hhmm(s.end), (s.end - s.start) / 60, sessionName(s, types), trainerName(s.trainerId, trainers), notes]);
   }
   if (result.cleaning) rows.push([DAY_NAMES[Math.floor(result.cleaning.start / 1440)], hhmm(result.cleaning.start), hhmm(result.cleaning.end), (result.cleaning.end - result.cleaning.start) / 60, 'יש"פ + ניקיון', '', '']);
@@ -34,12 +34,19 @@ function restRows(result, config) {
 function summaryRows(result, config) {
   const rows = [['סוג אימון', 'עדיפות', 'נדרש (ש\')', 'שובץ (ש\')']];
   for (const t of config.types) {
-    const p = result.summary?.perType?.[t.id] || { requested: t.hours * 60, scheduled: 0 };
-    rows.push([t.name, t.priority, p.requested / 60, p.scheduled / 60]);
+    const p = result.summary?.perType?.[t.id] || { requested: t.hours * 60, scheduled: 0 };    rows.push([t.name, t.priority, p.requested / 60, p.scheduled / 60]);
   }
+  if (result.summary?.seriesMinutes) rows.push(['סדרות (לא נספר בדרישות)', '', '', result.summary.seriesMinutes / 60]);
   rows.push([]);
   rows.push(['סה"כ שעות אימון', '', '', (result.summary?.totalMinutes || 0) / 60]);
   rows.push(['ניצול', '', '', Math.round((result.summary?.utilization || 0) * 100) + '%']);
+  rows.push([]);
+  rows.push(['מאמנת', 'ימים זמינים', '', 'שעות בשבוע']);
+  for (const t of config.trainers) {
+    const p = result.summary?.perTrainer?.[t.id];
+    const m = p?.minutes ?? (result.summary?.perTrainerDay?.[t.id] || []).reduce((a, b) => a + b, 0);
+    rows.push([t.name, (t.days || [0, 1, 2, 3, 4]).map(d => DAY_NAMES[d]).join(' '), '', m / 60]);
+  }
   if (result.warnings?.length) { rows.push([]); rows.push(['הערות']); result.warnings.forEach(w => rows.push([w])); }
   return rows;
 }
@@ -95,7 +102,7 @@ export async function renderPNG(result, config) {
   const { types, trainers, rules } = config;
   const F = '"Heebo", Arial, sans-serif';
   try { await Promise.all([document.fonts.load(`800 20px Heebo`), document.fonts.load(`500 16px Heebo`)]); } catch {}
-  const W = 1600, headH = 150, dayHeadH = 50, ppm = 0.72, bodyH = 1440 * ppm, axisW = 64, pad = 36, footH = 150;
+  const W = 1600, headH = 150, dayHeadH = 50, ppm = 0.72, bodyH = 1440 * ppm, axisW = 64, pad = 36, footH = 196;
   const H = headH + dayHeadH + bodyH + footH + pad;
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -143,6 +150,7 @@ export async function renderPNG(result, config) {
     ctx.fillStyle = color; ctx.fillRect(x, top + s * ppm, laneW, l * ppm);
     if (striped) { ctx.fillStyle = 'rgba(0,0,0,.35)'; for (let y = 0; y < l * ppm; y += 8) ctx.fillRect(x, top + s * ppm + y, laneW, 3); }
   };
+  trainers.forEach((t, i) => (t.days ? [0, 1, 2, 3, 4].filter(d => !t.days.includes(d)) : []).forEach(d => lane(d, 0, 1440, i, '#0b131a', false)));
   (result.sleep || []).forEach(sl => seg(sl.start, sl.end, (d, s, l) => lane(d, s, l, tIdx[sl.trainerId] ?? 0, '#4f6b84', true)));
   if (result.after?.start != null) seg(result.after.start, result.after.end, (d, s, l) => lane(d, s, l, tIdx[result.after.trainerId] ?? 0, '#f0962e', true));
 
@@ -161,19 +169,22 @@ export async function renderPNG(result, config) {
     seg(s.start, s.end, (d, st, l) => block(d, st, l, typeColor(s.typeId, types), [nm, `${rng(s.start, s.end)}`, trainerName(s.trainerId, trainers)]));
   }
   // footer: per type
-  let fx = W - pad; const fy = top + bodyH + 46;
+  let fx = W - pad, fy = top + bodyH + 46, rows = 1;
   ctx.textAlign = 'right';
-  for (const t of types) {
-    const p = sm.perType?.[t.id]; if (!p || !p.requested) continue;
-    const txt = `${t.name}  ${hoursTxt(p.scheduled)}/${hoursTxt(p.requested)} ש'`;
+  const footItems = [...types].sort((a, b) => a.priority - b.priority).map(t => [t.id, t.name, sm.perType?.[t.id]]).filter(x => x[2] && x[2].requested);
+  if (sm.seriesMinutes) footItems.unshift(['series', 'סדרות', null]);
+  for (const [id, name, p] of footItems) {
+    const t = { id };
+    const txt = p ? `${name}  ${hoursTxt(p.scheduled)}/${hoursTxt(p.requested)} ש'` : `${name}  ${hoursTxt(sm.seriesMinutes)} ש'`;
     ctx.font = `700 20px ${F}`; const tw = ctx.measureText(txt).width;
-    if (fx - tw - 40 < pad) { break; }
+    if (fx - tw - 40 < pad) { if (rows >= 2) break; rows++; fx = W - pad; fy += 34; }
     ctx.fillStyle = typeColor(t.id, types); ctx.fillRect(fx - 16, fy - 15, 16, 16);
     ctx.fillStyle = '#eef3f8'; ctx.fillText(txt, fx - 26, fy);
     fx -= tw + 64;
   }
   ctx.fillStyle = '#b3c3d2'; ctx.font = `500 17px ${F}`;
-  ctx.fillText(`מאמנות: ${trainers.map(t => t.name).join(' · ')}   |   פס צד מפוספס: שינה (כחול) ואפטר (כתום)`, W - pad, fy + 44);
+  const tmin = id => sm.perTrainer?.[id]?.minutes ?? (sm.perTrainerDay?.[id] || []).reduce((a, b) => a + b, 0);
+  ctx.fillText(fitText(ctx, `מאמנות: ${trainers.map(t => `${t.name} ${hoursTxt(tmin(t.id))} ש'`).join(' · ')}   |   פס צד מפוספס: שינה (כחול), אפטר (כתום), לא זמינה (כהה)`, W - pad * 2), W - pad, fy + 44);
   const warn = (result.warnings || [])[0];
   if (warn) { ctx.fillStyle = '#ffc56b'; ctx.fillText(fitText(ctx, '⚠ ' + warn, W - pad * 2), W - pad, fy + 78); }
   return new Promise(res => cv.toBlob(res, 'image/png'));

@@ -2,7 +2,9 @@
 export const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי'];
 export const DAY_SHORT = ["א'", "ב'", "ג'", "ד'", "ה'"];
 
+export const SERIES_ID = 'series';
 export const TYPE_COLORS = {
+  series: '#f2a0c4',
   maamanot: '#86bdf2',
   kamas: '#f4b26a',
   cadets2: '#7fd3b1',

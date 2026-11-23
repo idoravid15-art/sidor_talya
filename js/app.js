@@ -1,7 +1,9 @@
 // Periscope Strategy · UI controller
 import * as engine from './engine.js';
 const { DEFAULT_CONFIG, fmt } = engine;
-import { DAY_NAMES, typeColor, toMin, hhmm, rng, hoursTxt, esc, sessionName, trainerName, timeOptions } from './ui-common.js';
+const MAX_TRAINERS = engine.MAX_TRAINERS || 5;
+const LETTERS = ['א', 'ב', 'ג', 'ד', 'ה'];
+import { DAY_NAMES, DAY_SHORT, typeColor, toMin, hhmm, rng, hoursTxt, esc, sessionName, trainerName, timeOptions } from './ui-common.js';
 import { renderBoard, renderLegend } from './board.js';
 import { exportPrint, exportPNG, exportExcel } from './exports.js';
 
@@ -33,14 +35,36 @@ function load() {
     const s = JSON.parse(raw);
     const cfg = merge(st.config, s.config || {});
     // types: keep default list/order, take saved user fields by id
+    // types: keep default list/order, take saved user fields by id
     cfg.types = DEFAULT_CONFIG.types.map(t => {
       const sv = (s.config?.types || []).find(x => x.id === t.id) || {};
-      return { ...t, ...pick(sv, ['hours', 'allowShort', 'duration', 'name']) };
+      const r = { ...t, ...pick(sv, ['hours', 'allowShort', 'duration', 'name', 'blocked']) };
+      r.blocked = Array.isArray(r.blocked) ? r.blocked.filter(b => b && b.day != null && b.from && b.to) : [];
+      return r;
     });
-    if (!Array.isArray(cfg.trainers) || cfg.trainers.length !== DEFAULT_CONFIG.trainers.length) cfg.trainers = clone(DEFAULT_CONFIG.trainers);
+    cfg.trainers = migrateTrainers(s.config?.trainers);
+    // "after" belongs to the manager: legacy auto mode (engine picked the trainer) -> Talya
+    if (s.config?.after?.mode !== 'manual' || !cfg.trainers.some(t => t.id === cfg.after.trainerId)) cfg.after.trainerId = afterOwner({ ...cfg, after: { ...cfg.after, trainerId: null } });
     return { ...st, config: cfg, step: [1, 2, 3, 4].includes(s.step) ? s.step : 1, seed: s.seed || 1, result: s.result || null, builtFor: s.builtFor || null };
   } catch { return st; }
 }
+const LEGACY_T1 = 'מאמנת א';
+const ALL_DAYS = [0, 1, 2, 3, 4];
+function migrateTrainers(saved) {
+  if (!Array.isArray(saved) || !saved.length) return clone(DEFAULT_CONFIG.trainers);
+  const ids = new Set();
+  return saved.slice(0, MAX_TRAINERS).map((t, i) => {
+    const def = DEFAULT_CONFIG.trainers[i] || {};
+    let id = typeof t?.id === 'string' && t.id ? t.id : def.id || `t${i + 1}`;
+    while (ids.has(id)) id += 'x';
+    ids.add(id);
+    let name = typeof t?.name === 'string' && t.name.trim() ? t.name : def.name || `מאמנת ${i + 1}`;
+    if (id === 't1' && name === LEGACY_T1) name = DEFAULT_CONFIG.trainers[0].name;
+    const days = Array.isArray(t?.days) ? t.days.filter(d => ALL_DAYS.includes(+d)).map(Number) : ALL_DAYS.slice();
+    return { id, name, isManager: 'isManager' in (t || {}) ? !!t.isManager : id === 't1', days: days.length ? days : ALL_DAYS.slice() };
+  });
+}
+const afterOwner = c => engine.afterTrainerId ? engine.afterTrainerId(c) : (c.trainers.find(t => t.isManager) || c.trainers[0]).id;
 const pick = (o, ks) => Object.fromEntries(ks.filter(k => k in o).map(k => [k, o[k]]));
 let state = load();
 let saveTimer;
@@ -86,14 +110,16 @@ function go(step, { push = true, focus = true } = {}) {
 
 /* ---------------- step 1: requirements ---------------- */
 function estimateCapacity(c) {
-  const r = c.rules, n = c.trainers.length;
+  const r = c.rules;
   const wS = r.weekStart ?? 600, wE = r.weekEnd ?? 6600, dMax = r.dailyMax ?? 480;
   let cap = 0;
   for (let d = 0; d < 5; d++) {
     const a = Math.max(d * 1440, wS), b = Math.min((d + 1) * 1440, wE);
+    const n = c.trainers.filter(t => !t.days || t.days.includes(d)).length;
     if (b > a) cap += Math.min(b - a, n * dMax);
   }
   cap -= r.cleaningMinutes ?? 60;
+  cap -= seriesMinutes(c);
   cap -= 240; // one trainer's after evening
   cap -= (c.fixed || []).filter(f => !f.typeId).reduce((s, f) => s + (+f.duration || 0), 0);
   cap *= 0.9; // breaks between sessions
@@ -103,7 +129,7 @@ function estimateCapacity(c) {
 const capCache = { key: null, val: null, pending: null };
 function capacity(c) {
   if (typeof engine.estimateCapacity !== 'function') return estimateCapacity(c);
-  const key = JSON.stringify({ t: c.trainers.length, f: c.fixed, a: c.after, cl: c.cleaning, r: c.rules });
+  const key = JSON.stringify({ t: c.trainers.map(t => [t.id, t.days]), s: c.series, f: c.fixed, a: c.after, cl: c.cleaning, r: c.rules });
   if (capCache.key === key && capCache.val != null) return capCache.val;
   if (capCache.pending !== key) {
     capCache.pending = key;
@@ -115,8 +141,10 @@ function capacity(c) {
     };
     (window.requestIdleCallback || (f => setTimeout(f, 60)))(run, { timeout: 800 });
   }
-  return capCache.val ?? estimateCapacity(c);
+  return capCache.key === key ? capCache.val : estimateCapacity(c);
 }
+const seriesBlocks = c => (c.series?.enabled ? (engine.seriesSessions ? engine.seriesSessions(c) : []) : []);
+const seriesMinutes = c => seriesBlocks(c).reduce((a, b) => a + (+b.duration || 0), 0);
 function requiredMinutes(c) { return c.types.reduce((s, t) => s + Math.round((+t.hours || 0) * 60), 0); }
 
 function renderTypes() {
@@ -138,8 +166,62 @@ function renderTypes() {
       </div>
       <div class="type-meta"><span>אימון של ${hoursTxt(t.duration)} ש'</span><span class="sess-hint">${n}</span></div>
       ${canShort ? `<label class="switch"><input type="checkbox" data-act="short" ${t.allowShort ? 'checked' : ''}><span class="switch-track" aria-hidden="true"></span><span>אפשר לקצר לאימון של 1.5 שעות</span></label>` : ''}
+      <details class="cons"${openCons.has(t.id) ? ' open' : ''}><summary>אילוצים <span class="cons-badge${(t.blocked || []).length ? ' has' : ''}" aria-label="${(t.blocked || []).length} אילוצים">${(t.blocked || []).length}</span><span class="sr-only">: זמנים שבהם ${esc(t.name)} לא יכולים להתאמן</span></summary>
+        <div class="cons-body">${consBody(t)}</div>
+      </details>
     </article>`;
   }).join('');
+}
+const openCons = new Set();
+const consText = b => {
+  const all = b.from === b.to && b.from === '00:00';
+  if (all) return `${DAY_NAMES[b.day]} · כל היום`;
+  const next = toMin(b.to) <= toMin(b.from);
+  return `${DAY_NAMES[b.day]} ${rng(toMin(b.from), toMin(b.to))}${next ? ' (עד למחרת)' : ''}`;
+};
+function consBody(t) {
+  const list = t.blocked || [], times = timeOptions();
+  const opt = (arr, v) => arr.map(x => `<option value="${x[0]}" ${String(x[0]) === String(v) ? 'selected' : ''}>${x[1]}</option>`).join('');
+  return `<p class="hint">זמנים שבהם האוכלוסייה הזו לא יכולה להתאמן. אם "עד" מוקדם מ"מ-", הטווח נמשך למחרת.</p>
+    ${list.length ? `<ul class="cons-list">${list.map((b, k) => `<li><span>${consText(b)}</span><button type="button" class="icon-btn" data-act="cdel" data-k="${k}" aria-label="מחיקת אילוץ: ${esc(consText(b))}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></li>`).join('')}</ul>` : '<p class="hint">אין אילוצים.</p>'}
+    <div class="cons-form">
+      <label class="field"><span>יום</span><select data-c="day">${opt(DAY_NAMES.map((n, d) => [d, n]), 0)}</select></label>
+      <label class="field"><span>מ-</span><select data-c="from">${opt(times.map(x => [x, x]), '08:00')}</select></label>
+      <label class="field"><span>עד</span><select data-c="to">${opt(times.map(x => [x, x]), '12:00')}</select></label>
+    </div>
+    <div class="cons-actions">
+      <label class="switch"><input type="checkbox" data-c="allday"><span class="switch-track" aria-hidden="true"></span><span>כל היום</span></label>
+      <button type="button" class="btn btn-ghost btn-sm" data-act="cadd">הוספת אילוץ</button>
+      ${list.length ? '<button type="button" class="btn btn-ghost btn-sm" data-act="cclear">ניקוי אילוצים</button>' : ''}
+    </div>
+    <p class="cons-err" role="alert"></p>`;
+}
+function renderCons(i, focusSel) {
+  const t = cfg().types[i], card = $(`.type-card[data-i="${i}"]`);
+  card.querySelector('.cons-body').innerHTML = consBody(t);
+  const n = (t.blocked || []).length, badge = card.querySelector('.cons-badge');
+  badge.textContent = n; badge.classList.toggle('has', n > 0); badge.setAttribute('aria-label', `${n} אילוצים`);
+  if (focusSel) card.querySelector(focusSel)?.focus();
+}
+function consAction(i, act, el) {
+  const t = cfg().types[i], card = $(`.type-card[data-i="${i}"]`);
+  t.blocked ||= [];
+  if (act === 'cadd') {
+    const q = k => card.querySelector(`[data-c=${k}]`);
+    const all = q('allday').checked, from = all ? '00:00' : q('from').value, to = all ? '00:00' : q('to').value;
+    if (!all && from === to) { card.querySelector('.cons-err').textContent = 'שעת הסיום זהה להתחלה. ליום שלם סמני "כל היום".'; return; }
+    const b = { day: +q('day').value, from, to };
+    if (t.blocked.some(x => x.day === b.day && x.from === b.from && x.to === b.to)) { card.querySelector('.cons-err').textContent = 'האילוץ הזה כבר קיים.'; return; }
+    t.blocked.push(b);
+    t.blocked.sort((a, c) => a.day - c.day || toMin(a.from) - toMin(c.from));
+    renderCons(i, '[data-act=cadd]'); changed(); toast(`נוסף אילוץ ל${t.name}: ${consText(b)}`);
+  } else if (act === 'cdel') {
+    t.blocked.splice(+el.dataset.k, 1);
+    renderCons(i, '[data-act=cadd]'); changed();
+  } else if (act === 'cclear') {
+    t.blocked = [];
+    renderCons(i, '[data-act=cadd]'); changed(); toast(`האילוצים של ${t.name} נוקו`);
+  }
 }
 function sessionsHint(t) {
   const m = Math.round((+t.hours || 0) * 60);
@@ -166,13 +248,21 @@ function bindTypes() {
     const i = +b.closest('.type-card').dataset.i, t = cfg().types[i];
     if (b.dataset.act === 'inc') setHours(i, (+t.hours || 0) + 0.5);
     if (b.dataset.act === 'dec') setHours(i, (+t.hours || 0) - 0.5);
+    if (['cadd', 'cdel', 'cclear'].includes(b.dataset.act)) consAction(i, b.dataset.act, b);
   });
   grid.addEventListener('change', e => {
     const card = e.target.closest('.type-card'); if (!card) return;
     const i = +card.dataset.i;
+    if (e.target.dataset.c === 'allday') { card.querySelectorAll('[data-c=from],[data-c=to]').forEach(s => (s.disabled = e.target.checked)); return; }
+    if (e.target.dataset.c) { card.querySelector('.cons-err').textContent = ''; return; }
     if (e.target.type === 'number') setHours(i, e.target.value);
     if (e.target.dataset.act === 'short') { cfg().types[i].allowShort = e.target.checked; card.querySelector('.sess-hint').textContent = sessionsHint(cfg().types[i]); changed(); }
   });
+}
+function renderSeries() {
+  const on = !!cfg().series?.enabled;
+  $('#seriesOn').checked = on;
+  $('.series-panel').classList.toggle('on', on);
 }
 function renderCapacity() {
   const req = requiredMinutes(cfg()), cap = capacity(cfg());
@@ -186,7 +276,7 @@ function renderCapacity() {
   const st = $('#capStatus'); st.dataset.level = level;
   st.textContent = { ok: '✓ יש מרווח', tight: '! צפוף', over: '✕ מעבר לקיבולת' }[level];
   $('#capText').innerHTML = req
-    ? `נדרשות <strong>${hoursTxt(req)} ש'</strong> מתוך קיבולת משוערת של <strong>כ-${hoursTxt(cap)} ש'</strong> בשבוע.` +
+    ? `נדרשות <strong>${hoursTxt(req)} ש'</strong> מתוך קיבולת משוערת של <strong>כ-${hoursTxt(cap)} ש'</strong> בשבוע${seriesMinutes(cfg()) ? ` (אחרי ${hoursTxt(seriesMinutes(cfg()))} ש' סדרות)` : ''}.` +
       (level === 'over' ? ' חלק לא ייכנס, והמנוע יוותר קודם על העדיפויות הנמוכות.' : level === 'tight' ? ' כנראה ייכנס, אבל ייתכנו אימונים בלילה או מקוצרים.' : '')
     : `עוד לא הוזנו שעות. קיבולת משוערת: <strong>כ-${hoursTxt(cap)} ש'</strong> בשבוע.`;
 }
@@ -219,6 +309,8 @@ function initFixedForm() {
     if (abs < wS || end > wE) { err.textContent = `השעה מחוץ לשבוע העבודה (ראשון ${tfmt(wS)} עד חמישי ${tfmt(wE)}).`; $('#fxStart').focus(); return; }
     const clash = c.fixed.find(f => { const s = f.day * 1440 + toMin(f.start); return abs < s + f.duration && s < end; });
     if (clash) { err.textContent = `חופף לאימון קבוע אחר (${DAY_NAMES[clash.day]} ${clash.start}).`; return; }
+    const sclash = seriesBlocks(c).find(f => { const s = f.day * 1440 + toMin(f.start); return abs < s + f.duration && s < end; });
+    if (sclash) { err.textContent = `חופף לבלוק סדרות (${DAY_NAMES[sclash.day]} ${rng(toMin(sclash.start), toMin(sclash.start) + sclash.duration)}).`; return; }
     err.textContent = '';
     c.fixed.push({ id: 'f' + Date.now().toString(36), typeId, label: typeId ? '' : label, day, start, duration, trainerId: $('#fxTrainer').value || null });
     $('#fxLabel').value = '';
@@ -275,12 +367,44 @@ const getPath = (o, p) => p.split('.').reduce((a, k) => (a == null ? a : a[k]), 
 const setPath = (o, p, v) => { const ks = p.split('.'); const last = ks.pop(); const t = ks.reduce((a, k) => (a[k] ??= {}), o); t[last] = v; };
 
 function initSettings() {
-  ['#tName0', '#tName1'].forEach((sel, i) => $(sel).addEventListener('input', e => {
-    cfg().trainers[i].name = e.target.value.trim() || DEFAULT_CONFIG.trainers[i].name; changed();
-  }));
+  const list = $('#trainerList');
+  list.addEventListener('input', e => {
+    const i = +e.target.closest('[data-ti]')?.dataset.ti; if (e.target.dataset.act !== 'name' || isNaN(i)) return;
+    const t = cfg().trainers[i];
+    t.name = e.target.value.trim() || defaultName(i);
+    $$('#afterTrainer option').forEach(o => { if (o.value === t.id) o.textContent = t.name; });
+    changed();
+  });
+  list.addEventListener('change', e => {
+    const i = +e.target.closest('[data-ti]')?.dataset.ti; if (e.target.dataset.day == null || isNaN(i)) return;
+    const t = cfg().trainers[i], d = +e.target.dataset.day;
+    const days = new Set(t.days || ALL_DAYS);
+    if (e.target.checked) days.add(d); else days.delete(d);
+    if (!days.size) { e.target.checked = true; $('#trainerHint').textContent = 'כל מאמנת צריכה לפחות יום זמינות אחד.'; return; }
+    t.days = [...days].sort(); $('#trainerHint').textContent = '';
+    changed();
+  });
+  list.addEventListener('click', e => {
+    const b = e.target.closest('[data-act=del]'); if (!b) return;
+    const c = cfg(), i = +b.closest('[data-ti]').dataset.ti, t = c.trainers[i];
+    if (c.trainers.length <= 1) return;
+    if (t.id === afterOwner(c)) { $('#trainerHint').textContent = `האפטר של ${t.name}. קודם להעביר את האפטר למאמנת אחרת.`; $('#afterTrainer').focus(); return; }
+    c.trainers.splice(i, 1);
+    c.fixed.forEach(f => { if (f.trainerId === t.id) f.trainerId = null; });
+    $('#trainerHint').textContent = '';
+    renderSettings(); changed(); toast(`${t.name} הוסרה`);
+    $('#addTrainer').focus();
+  });
+  $('#addTrainer').addEventListener('click', () => {
+    const c = cfg(); if (c.trainers.length >= MAX_TRAINERS) return;
+    let n = c.trainers.length + 1; while (c.trainers.some(t => t.id === 't' + n)) n++;
+    c.trainers.push({ id: 't' + n, name: defaultName(c.trainers.length), days: ALL_DAYS.slice() });
+    renderSettings(); changed();
+    const inputs = $$('#trainerList input[data-act=name]'); inputs[inputs.length - 1]?.focus(); inputs[inputs.length - 1]?.select();
+  });
   $$('input[name=afterMode]').forEach(r => r.addEventListener('change', e => {
     const a = cfg().after; a.mode = e.target.value;
-    if (a.mode === 'manual') { a.trainerId ||= $('#afterTrainer').value; a.day ??= +$('#afterDay').value; }
+    if (a.mode === 'manual') a.day ??= +$('#afterDay').value;
     syncModes(); changed();
   }));
   $$('input[name=cleanMode]').forEach(r => r.addEventListener('change', e => {
@@ -288,7 +412,7 @@ function initSettings() {
     if (cl.mode === 'manual') { cl.day ??= +$('#cleanDay').value; cl.start ||= $('#cleanStart').value; }
     syncModes(); changed();
   }));
-  $('#afterTrainer').addEventListener('change', e => { cfg().after.trainerId = e.target.value; changed(); });
+  $('#afterTrainer').addEventListener('change', e => { cfg().after.trainerId = e.target.value; $('#trainerHint').textContent = ''; renderTrainers(); changed(); });
   $('#afterDay').addEventListener('change', e => { cfg().after.day = +e.target.value; changed(); });
   $('#cleanDay').addEventListener('change', e => { cfg().cleaning.day = +e.target.value; changed(); });
   $('#cleanStart').addEventListener('change', e => { cfg().cleaning.start = e.target.value; changed(); });
@@ -311,12 +435,31 @@ function syncTexts() {
   $('#thuTxt').textContent = `${tw.start}-${hhmm(toMin(tw.start) + (+tw.duration || 0))}`;
   $('#thuTradeTxt').textContent = tw.tradeoffMinutes;
 }
+const defaultName = i => (i === 0 ? DEFAULT_CONFIG.trainers[0].name : `מאמנת ${LETTERS[i] || i + 1}`);
+function renderTrainers() {
+  const c = cfg(), owner = afterOwner(c), one = c.trainers.length <= 1;
+  $('#trainerList').innerHTML = c.trainers.map((t, i) => {
+    const days = t.days || ALL_DAYS, isOwner = t.id === owner;
+    return `<li class="trainer-row" data-ti="${i}">
+      <div class="trainer-top">
+        <label class="field"><span>מאמנת ${i + 1}${isOwner ? '<span class="trainer-badge">· האפטר שלה</span>' : ''}</span><input type="text" data-act="name" maxlength="20" autocomplete="off" value="${esc(t.name)}"></label>
+        <button type="button" class="icon-btn" data-act="del" aria-label="הסרת ${esc(t.name)}" ${one ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+      <fieldset class="day-checks"><legend>ימים זמינים</legend>
+        ${ALL_DAYS.map(d => `<label class="day-check"><input type="checkbox" data-day="${d}" ${days.includes(d) ? 'checked' : ''} aria-label="${esc(t.name)} זמינה ביום ${DAY_NAMES[d]}"><span aria-hidden="true">${DAY_SHORT[d]}</span></label>`).join('')}
+      </fieldset></li>`;
+  }).join('');
+  const add = $('#addTrainer');
+  add.disabled = c.trainers.length >= MAX_TRAINERS;
+  add.title = add.disabled ? `עד ${MAX_TRAINERS} מאמנות` : '';
+}
 function renderSettings() {
   const c = cfg();
-  $('#tName0').value = c.trainers[0].name; $('#tName1').value = c.trainers[1].name;
+  c.after.trainerId = afterOwner(c);
+  renderTrainers();
   $(`input[name=afterMode][value=${c.after.mode}]`).checked = true;
   $(`input[name=cleanMode][value=${c.cleaning.mode}]`).checked = true;
-  fillSelect($('#afterTrainer'), c.trainers.map(t => [t.id, t.name]), c.after.trainerId || c.trainers[0].id);
+  fillSelect($('#afterTrainer'), c.trainers.map(t => [t.id, t.name]), c.after.trainerId);
   fillSelect($('#afterDay'), DAY_NAMES.slice(0, 4).map((n, i) => [i, n]), c.after.day ?? 0);
   fillSelect($('#cleanDay'), DAY_NAMES.map((n, i) => [i, n]), c.cleaning.day ?? 0);
   fillSelect($('#cleanStart'), timeOptions().map(t => [t, t]), c.cleaning.start || '12:00');
@@ -443,9 +586,21 @@ function renderResult(opts = {}) {
   const req = pt.reduce((a, p) => a + (p.requested || 0), 0), got = pt.reduce((a, p) => a + Math.min(p.scheduled || 0, p.requested || 0), 0);
   $('#resultLead').textContent = (req ? `שובצו ${hoursTxt(got)} מתוך ${hoursTxt(req)} ש' נדרשות` : `שובצו ${hoursTxt(sm.totalMinutes || 0)} ש' אימון`) + ` · ניצול ${Math.round((sm.utilization || 0) * 100)}%`;
 
-  const loads = c.trainers.map(t => [t.name, (sm.perTrainerDay?.[t.id] || []).reduce((a, b) => a + b, 0)]);
+  const loads = c.trainers.map(t => {
+    const p = sm.perTrainer?.[t.id];
+    const days = p?.availableDays ?? (t.days || ALL_DAYS).length;
+    return [t.name, p?.minutes ?? (sm.perTrainerDay?.[t.id] || []).reduce((a, b) => a + b, 0), days];
+  });
+  const mins = loads.map(l => l[1]);
+  const prop = new Set(loads.map(l => l[2])).size > 1;
+  const diff = sm.balance?.diffMinutes ?? (mins.length > 1 ? Math.max(...mins) - Math.min(...mins) : 0);
+  const balanced = sm.balance ? sm.balance.balanced : diff <= 30;
+  const dTxt = diff ? ` · ${prop ? 'סטייה מהחלק היחסי' : 'הפרש'} ${diff} דק'` : '';
+  const balTxt = loads.length < 2 ? '' : balanced
+    ? `<span class="balance ok">✓ מאוזן${prop ? ' ביחס לימי זמינות' : ''}${dTxt}</span>`
+    : `<span class="balance off">! לא מאוזן${dTxt}</span>`;
   $('#util').innerHTML = ring(sm.utilization || 0) + `<div><p class="util-sub">${hoursTxt(sm.totalMinutes || 0)} ש' אימון מתוך ${hoursTxt(sm.capacityMinutes || 0)} ש' זמינות</p>
-    <ul class="trainer-load" aria-label="עומס מאמנות">${loads.map(([n, m]) => `<li><span>${esc(n)}</span><b>${hoursTxt(m)} ש'</b></li>`).join('')}</ul></div>`;
+    <ul class="trainer-load" aria-label="שעות שבועיות לכל מאמנת">${loads.map(([n, m, d]) => `<li><span>${esc(n)}${d < 5 ? `<small>(${d} ימים)</small>` : ''}</span><b>${hoursTxt(m)} ש'</b></li>`).join('')}</ul>${balTxt}</div>`;
 
   $('#gauges').innerHTML = c.types.map(t => {
     const p = sm.perType?.[t.id] || { requested: Math.round(t.hours * 60), scheduled: 0 };
@@ -457,7 +612,10 @@ function renderResult(opts = {}) {
       <span class="gauge-name"><span class="type-swatch" style="background:${typeColor(t.id, c.types)}" aria-hidden="true"></span>${esc(t.name)}</span>
       <span class="gauge-val">${hoursTxt(p.scheduled)} / ${hoursTxt(p.requested)} ש' ${st}</span>
       <span class="gauge-bar" aria-hidden="true"><i style="width:${pct}%"></i></span></li>`;
-  }).join('');
+  }).join('') + (sm.seriesMinutes ? `<li class="gauge-row" style="--c:${typeColor('series')}">
+      <span class="gauge-name"><span class="type-swatch" style="background:${typeColor('series')}" aria-hidden="true"></span>סדרות</span>
+      <span class="gauge-val">${hoursTxt(sm.seriesMinutes)} ש' <span class="st">בלוקים קבועים, לא נספר בדרישות</span></span>
+      <span class="gauge-bar" aria-hidden="true"><i style="width:100%"></i></span></li>` : '');
 
   const items = [
     ...(r.violations || []).map(v => `<li class="e"><span class="ico" aria-hidden="true">✕</span><span><span class="sr-only">שגיאה: </span>${esc(v.message || v.code || v)}</span></li>`),
@@ -475,7 +633,15 @@ function renderResult(opts = {}) {
 
 /* ---------------- init ---------------- */
 function init() {
-  renderTypes(); bindTypes(); renderCapacity();
+  renderTypes(); bindTypes(); renderCapacity(); renderSeries();
+  $('#typeGrid').addEventListener('toggle', e => {
+    const card = e.target.closest?.('.type-card'); if (!card || !e.target.matches('details.cons')) return;
+    const id = cfg().types[+card.dataset.i].id; e.target.open ? openCons.add(id) : openCons.delete(id);
+  }, true);
+  $('#seriesOn').addEventListener('change', e => {
+    cfg().series = { ...(cfg().series || {}), enabled: e.target.checked };
+    renderSeries(); changed(); toast(e.target.checked ? 'תקופת סדרות הופעלה' : 'תקופת סדרות כובתה');
+  });
   initFixedForm(); initSettings();
   $$('.step').forEach(b => b.addEventListener('click', () => go(+b.dataset.step)));
   $$('[data-go]').forEach(b => b.addEventListener('click', () => {
@@ -513,7 +679,7 @@ function init() {
 function doReset() {
   try { localStorage.removeItem(KEY); } catch {}
   state = defaults();
-  renderTypes(); renderCapacity(); renderFixed(); renderSettings();
+  renderTypes(); renderSeries(); renderCapacity(); renderFixed(); renderSettings();
   $('#board').innerHTML = ''; $('#stale')?.remove();
   go(1); toast('הכל אופס לברירת המחדל');
 }

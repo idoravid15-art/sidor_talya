@@ -4,7 +4,10 @@
 export const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
 export const DEFAULT_CONFIG = {
-  trainers: [{ id: 't1', name: 'מאמנת א' }, { id: 't2', name: 'מאמנת ב' }],
+  trainers: [
+    { id: 't1', name: 'טליה', isManager: true, days: [0, 1, 2, 3, 4] },
+    { id: 't2', name: 'מאמנת ב', days: [0, 1, 2, 3, 4] },
+  ],
   types: [
     { id: 'maamanot', name: 'מאמנות', priority: 1, hours: 0, duration: 120, allowShort: true },
     { id: 'kamas', name: 'קמ"ס', priority: 2, hours: 0, duration: 120, allowShort: true },
@@ -13,7 +16,18 @@ export const DEFAULT_CONFIG = {
     { id: 'cadetsQual', name: 'כשירויות צוערים', priority: 5, hours: 0, duration: 90, allowShort: false },
   ],
   fixed: [],
-  after: { mode: 'auto', trainerId: null, day: null },
+  // "תקופת סדרות": long fixed blocks placed before everything else (exception to maxContinuous only)
+  series: {
+    enabled: false,
+    blocks: [
+      { day: 0, start: '18:00', duration: 240 },
+      { day: 1, start: '06:00', duration: 180 }, { day: 1, start: '18:00', duration: 240 },
+      { day: 2, start: '06:00', duration: 180 }, { day: 2, start: '18:00', duration: 240 },
+      { day: 3, start: '06:00', duration: 180 }, { day: 3, start: '18:00', duration: 240 },
+      { day: 4, start: '06:00', duration: 180 },
+    ],
+  },
+  after: { mode: 'auto', trainerId: 't1', day: null }, // trainer is fixed (the manager); mode picks the day
   cleaning: { mode: 'auto', day: null, start: null },
   rules: {
     weekStart: 600, weekEnd: 6600, slot: 30, maxContinuous: 120, minBreak: 30,
@@ -26,6 +40,10 @@ export const DEFAULT_CONFIG = {
 };
 
 const SHORT_MIN = 90;
+export const SERIES_TYPE = 'series';
+export const SERIES_NAME = 'סדרות';
+export const MAX_TRAINERS = 5;
+const ALL_DAYS = [0, 1, 2, 3, 4];
 
 // ---------- helpers ----------
 export function parseHM(s) {
@@ -69,8 +87,13 @@ export function normalizeConfig(config = {}) {
   const c = config ? clone(config) : {};
   const rules = { ...d.rules, ...(c.rules || {}) };
   rules.thursdayWindow = { ...d.rules.thursdayWindow, ...((c.rules && c.rules.thursdayWindow) || {}) };
-  const trainers = (c.trainers && c.trainers.length ? c.trainers : d.trainers)
-    .map((t, i) => ({ id: t.id ?? `t${i + 1}`, name: t.name ?? `מאמנת ${i + 1}` }));
+  const trainers = (c.trainers && c.trainers.length ? c.trainers : d.trainers).slice(0, MAX_TRAINERS)
+    .map((t, i) => ({
+      id: t.id ?? `t${i + 1}`, name: t.name ?? `מאמנת ${i + 1}`, isManager: !!t.isManager,
+      days: Array.isArray(t.days) ? [...new Set(t.days.map(Number).filter((x) => Number.isInteger(x) && x >= 0 && x <= 6))].sort() : ALL_DAYS.slice(),
+    }));
+  const after = { ...d.after, ...(c.after || {}) };
+  after.trainerId = afterTrainerId({ trainers, after });
   const types = (c.types && c.types.length ? c.types : d.types).map((t, i) => {
     const base = d.types.find((x) => x.id === t.id) || {};
     const r = { ...base, ...t };
@@ -79,17 +102,49 @@ export function normalizeConfig(config = {}) {
     r.duration = Number(r.duration) || 120;
     r.allowShort = !!r.allowShort;
     r.name = r.name ?? r.id;
+    r.blocked = Array.isArray(r.blocked) ? r.blocked.filter((b) => b && b.day != null && b.from != null && b.to != null) : [];
     return r;
   });
   return {
     trainers,
     types,
     fixed: Array.isArray(c.fixed) ? c.fixed : [],
-    after: { ...d.after, ...(c.after || {}) },
+    series: {
+      enabled: !!(c.series && c.series.enabled),
+      blocks: (c.series && Array.isArray(c.series.blocks) ? c.series.blocks : d.series.blocks)
+        .map((b) => ({ day: Number(b.day) || 0, start: b.start, duration: Number(b.duration) || 0 })).filter((b) => b.duration > 0),
+    },
+    after,
     cleaning: { ...d.cleaning, ...(c.cleaning || {}) },
     rules,
   };
 }
+
+// a type's weekly constraint {day, from, to} as absolute [start, end); to <= from means next day ("כל היום" = 00:00-00:00)
+export function blockedRange(b) {
+  const a = Number(b.day) * 1440 + parseHM(b.from);
+  let e = Number(b.day) * 1440 + parseHM(b.to);
+  if (e <= a) e += 1440;
+  return [a, e];
+}
+
+// series blocks as fixed sessions with no trainer (the engine picks one per block)
+export function seriesSessions(config) {
+  const blocks = (config.series && config.series.blocks) || DEFAULT_CONFIG.series.blocks;
+  return blocks.map((b) => ({
+    id: `series-${b.day}-${String(b.start).replace(':', '')}`, typeId: null, label: SERIES_NAME,
+    day: b.day, start: b.start, duration: b.duration, trainerId: null, series: true,
+  }));
+}
+
+// the trainer who always gets the "after": configured one, else the manager, else the first
+export function afterTrainerId(config) {
+  const T = (config && config.trainers) || [];
+  const want = config && config.after && config.after.trainerId;
+  if (want != null && T.some((t) => t.id === want)) return want;
+  return (T.find((t) => t.isManager) || T[0] || {}).id ?? null;
+}
+const availOn = (t, d) => !Array.isArray(t.days) || t.days.includes(d);
 
 // ---------- context ----------
 function buildCtx(cfg) {
@@ -124,13 +179,21 @@ function buildCtx(cfg) {
     const reach = new Uint8Array(reqK + 1);
     reach[0] = 1;
     for (let r = 1; r <= reqK; r++) for (const k of durK) if (r >= k && reach[r - k]) { reach[r] = 1; break; }
-    return { cfgIdx: i, id: t.id, name: t.name, g: prios.indexOf(t.priority), defK, durK, reqK, reach };
+    // run[s] = consecutive slots from s not blocked by this type's constraints
+    const run = new Int16Array(N + 1);
+    const ranges = t.blocked.map(blockedRange);
+    for (let s = N - 1; s >= 0; s--) {
+      const a = ws + s * slot, b = a + slot;
+      run[s] = ranges.some(([x, y]) => x < b && y > a) ? 0 : run[s + 1] + 1;
+    }
+    return { cfgIdx: i, id: t.id, name: t.name, g: prios.indexOf(t.priority), defK, durK, reqK, reach, run, blocked: ranges.length > 0 };
   });
   const typeById = new Map(types.map((t, i) => [t.id, i]));
   const G = prios.length;
 
-  // fixed sessions
-  const fixed = cfg.fixed.map((f, i) => {
+  // fixed sessions (user fixed first, then series blocks when the series period is on)
+  const allFixed = cfg.fixed.concat(cfg.series.enabled ? seriesSessions(cfg) : []);
+  const fixed = allFixed.map((f, i) => {
     const start = (Number(f.day) || 0) * 1440 + parseHM(f.start);
     const end = start + (Number(f.duration) || 0);
     let s0 = toSlot(start), s1 = toSlotCeil(end);
@@ -138,7 +201,7 @@ function buildCtx(cfg) {
     return {
       i, id: f.id ?? `f${i + 1}`, label: f.label || (f.typeId && cfg.types.find((t) => t.id === f.typeId)?.name) || 'אימון קבוע',
       typeId: f.typeId ?? null, ti: f.typeId != null && typeById.has(f.typeId) ? typeById.get(f.typeId) : -1,
-      start, end, s0: s0c, s1: Math.max(s0c, s1c), tr: f.trainerId != null ? trIdx(f.trainerId) : -1,
+      start, end, s0: s0c, s1: Math.max(s0c, s1c), tr: f.trainerId != null ? trIdx(f.trainerId) : -1, series: !!f.series,
     };
   });
   const freeFixed = fixed.filter((f) => f.tr < 0).map((f) => f.i);
@@ -153,6 +216,15 @@ function buildCtx(cfg) {
     win.brokenByFixed = fixed.some((f) => f.start < en && f.end > st);
   }
 
+  // availability: an unavailable calendar day blocks the whole day for that trainer
+  const avail = cfg.trainers.map((t) => Array.from({ length: Math.max(D, 7) }, (_, d) => availOn(t, d)));
+  const availDays = avail.map((a) => a.slice(0, D).filter(Boolean).length);
+  const baseHard = avail.map((a) => {
+    const h = new Uint8Array(N);
+    for (let s = 0; s < N; s++) if (!a[dayOfSlot[s]]) h[s] = 4;
+    return h;
+  });
+
   // nights & sleep options
   const sws = parseHM(R.sleepWindowStart), swe = parseHM(R.sleepWindowEnd);
   const sleepK = Math.ceil(R.sleepMinutes / slot);
@@ -166,6 +238,8 @@ function buildCtx(cfg) {
   for (let tr = 0; tr < T; tr++) {
     const per = [];
     for (const n of nights) {
+      // sleep matters only before a day she works
+      if (!avail[tr][n.d + 1]) { per.push([]); continue; }
       const all = [];
       for (let m = n.a; m + R.sleepMinutes <= n.b; m += slot) all.push(m);
       const ok = all.filter((m) => !fixed.some((f) => f.tr === tr && f.start < m + R.sleepMinutes && f.end > m));
@@ -178,13 +252,15 @@ function buildCtx(cfg) {
   const aE = parseHM(R.afterEnd), aR = parseHM(R.afterReturn);
   const afterOpts = [];
   const mkAfter = (tr, d) => ({ tr, d, start: d * 1440 + aE, end: (d + 1) * 1440 + aR });
+  const afterTr = Math.max(0, trIdx(cfg.after.trainerId));
   const afterDays = nights.map((n) => n.d);
-  if (cfg.after.mode === 'manual' && trIdx(cfg.after.trainerId) >= 0 && cfg.after.day != null) {
-    afterOpts.push(mkAfter(trIdx(cfg.after.trainerId), Number(cfg.after.day)));
+  if (cfg.after.mode === 'manual' && cfg.after.day != null) {
+    afterOpts.push(mkAfter(afterTr, Number(cfg.after.day)));
   } else {
-    for (let tr = 0; tr < T; tr++) for (const d of afterDays) afterOpts.push(mkAfter(tr, d));
+    for (const d of afterDays) if (avail[afterTr][d]) afterOpts.push(mkAfter(afterTr, d));
+    if (!afterOpts.length) for (const d of afterDays) afterOpts.push(mkAfter(afterTr, d));
   }
-  if (!afterOpts.length) afterOpts.push(mkAfter(0, 0));
+  if (!afterOpts.length) afterOpts.push(mkAfter(afterTr, 0));
   for (const a of afterOpts) { a.s0 = Math.max(0, toSlot(a.start)); a.s1 = Math.min(N, toSlotCeil(a.end)); }
 
   // cleaning options
@@ -205,7 +281,11 @@ function buildCtx(cfg) {
 
   return {
     cfg, R, slot, ws, we, N, T, brk, maxK, D, off, dayOfSlot, types, G, fixed, freeFixed, win,
-    nights, NN, sleepK, sleepOpts, afterOpts, CK, cleanOpts,
+    nights, NN, sleepK, sleepOpts, afterOpts, CK, cleanOpts, avail, availDays, baseHard,
+    // balance weight: minutes are compared per available day (scaled to a 5-day week)
+    balW: availDays.map((a) => (a > 0 ? 5 / a : 0)),
+    // tolerance: 30 real minutes for the trainer with the fewest days
+    balTol: 30 * Math.max(1, ...availDays.filter((a) => a > 0).map((a) => 5 / a)),
     cap: R.dailyMax, capSoft: Math.max(R.dailyMax, R.dailyMaxSoft),
   };
 }
@@ -216,10 +296,15 @@ function newState(ctx, rnd) {
   const sl = new Int16Array(T * NN);
   for (let tr = 0; tr < T; tr++) for (let n = 0; n < NN; n++) {
     const opts = ctx.sleepOpts[tr][n];
-    sl[tr * NN + n] = rnd ? Math.floor(rnd() * opts.length) : Math.min(opts.length - 1, 4);
+    sl[tr * NN + n] = !opts.length ? 0 : rnd ? Math.floor(rnd() * opts.length) : Math.min(opts.length - 1, 4);
   }
   const fa = new Int8Array(ctx.fixed.length).fill(-1);
-  ctx.freeFixed.forEach((fi, j) => { fa[fi] = rnd ? Math.floor(rnd() * T) : j % T; });
+  ctx.freeFixed.forEach((fi, j) => {
+    const d = Math.floor(ctx.fixed[fi].start / 1440);
+    const ok = []; for (let t = 0; t < T; t++) if (ctx.avail[t][d]) ok.push(t);
+    const pool = ok.length ? ok : Array.from({ length: T }, (_, t) => t);
+    fa[fi] = rnd ? pool[Math.floor(rnd() * pool.length)] : pool[j % pool.length];
+  });
   return {
     sl, fa,
     af: rnd ? Math.floor(rnd() * ctx.afterOpts.length) : 0,
@@ -242,7 +327,10 @@ function makeDecoder(ctx) {
   const rem = new Int32Array(NT);
   const sched = new Int32Array(NT);
   const weekMin = new Int32Array(T);
-  const vec = new Float64Array(G + 3);
+  const vec = new Float64Array(G + 4);
+  const balW = ctx.balW;
+  const nBal = balW.filter((w) => w > 0).length;
+  const balTol = ctx.balTol;
   const minK = Math.min(...types.map((t) => t.durK[t.durK.length - 1]), maxK);
   let rec = null;
   let shortCount = 0;
@@ -308,7 +396,7 @@ function makeDecoder(ctx) {
           for (let t = 0; t < T; t++) {
             if (t === first) continue;
             if (triedMask & (1 << t)) continue;
-            const key = dayMin[t * D + d0] * 10000 + weekMin[t];
+            const key = dayMin[t * D + d0] * 10000 + weekMin[t] * (balW[t] || 99);
             if (key < bestKey) { bestKey = key; tr = t; }
           }
           if (tr < 0) break;
@@ -325,7 +413,7 @@ function makeDecoder(ctx) {
           const nd = t.durK.length;
           for (let j = 0; j < nd; j++) {
             const k = t.durK[wantShort ? nd - 1 - j : j];
-            if (k > Lt || k > r || !capOK(tr, s, k, cap)) continue;
+            if (k > Lt || k > r || k > t.run[s] || !capOK(tr, s, k, cap)) continue;
             if (!pickAny) pickAny = k;
             if (t.reach[r - k]) { pick = k; break; }
           }
@@ -344,7 +432,7 @@ function makeDecoder(ctx) {
   function decode(st, winKept, record) {
     rec = record ? { sessions: [], fixedTr: [], conflicts: [] } : null;
     room.fill(0);
-    for (let t = 0; t < T; t++) { hard[t].fill(0); sess[t].fill(0); }
+    for (let t = 0; t < T; t++) { hard[t].set(ctx.baseHard[t]); sess[t].fill(0); }
     dayMin.fill(0); weekMin.fill(0); sched.fill(0);
     let conflicts = 0;
     // fixed in room
@@ -354,7 +442,9 @@ function makeDecoder(ctx) {
     for (let s = cs; s < cs + ctx.CK && s < N; s++) { if (room[s] === 1) conflicts++; room[s] = 4; }
     // sleep + after
     for (let tr = 0; tr < T; tr++) for (let n = 0; n < ctx.NN; n++) {
-      const s0 = ctx.sleepOpts[tr][n][st.sl[tr * ctx.NN + n]];
+      const opts = ctx.sleepOpts[tr][n];
+      if (!opts.length) continue;
+      const s0 = opts[st.sl[tr * ctx.NN + n]];
       const h = hard[tr];
       for (let s = Math.max(0, s0); s < s0 + ctx.sleepK && s < N; s++) h[s] = 1;
     }
@@ -372,7 +462,7 @@ function makeDecoder(ctx) {
       for (let s = f.s0; s < f.s1; s++) ss[s + brk] = 1;
       if (f.s1 > f.s0) addDay(tr, f.s0, f.s1 - f.s0, 1);
       weekMin[tr] += f.end - f.start;
-      if (f.end - f.start > ctx.R.maxContinuous) c++;
+      if (f.end - f.start > ctx.R.maxContinuous && !f.series) c++;
       if (f.ti >= 0) sched[f.ti] += Math.round((f.end - f.start) / slot);
       conflicts += c;
     }
@@ -393,6 +483,15 @@ function makeDecoder(ctx) {
     }
     for (let t = 0; t < T; t++) total += weekMin[t];
     vec[G + 1] = total;
+    // balance: spread (max-min) of minutes per available day; up to 30 min is "balanced"
+    let mx = -Infinity, mn = Infinity;
+    for (let t = 0; t < T; t++) {
+      if (!balW[t]) continue;
+      const v = weekMin[t] * balW[t];
+      if (v > mx) mx = v; if (v < mn) mn = v;
+    }
+    const spread = nBal > 1 ? mx - mn : 0;
+    vec[G + 2] = -Math.max(0, spread - balTol);
     // penalties
     let pen = 0;
     let offMin = 0, shorts = 0;
@@ -403,21 +502,20 @@ function makeDecoder(ctx) {
     shorts = shortCount;
     let over = 0;
     for (let i = 0; i < T * D; i++) if (dayMin[i] > ctx.cap) over += 40 + (dayMin[i] - ctx.cap);
-    let mx = -Infinity, mn = Infinity;
-    for (let t = 0; t < T; t++) { if (weekMin[t] > mx) mx = weekMin[t]; if (weekMin[t] < mn) mn = weekMin[t]; }
-    pen += offMin * 2 + over + shorts * 8 + (T > 1 ? (mx - mn) * 0.2 : 0);
+    pen += offMin * 2 + over + shorts * 8 + spread * 0.2;
     // cleaning preferences: in preferred hours and while trainers are awake
     let cpen = 0;
     for (let s = cs; s < cs + ctx.CK && s < N; s++) {
       if (off[s]) cpen += 15;
-      for (let t = 0; t < T; t++) if (hard[t][s]) cpen += 5;
+      for (let t = 0; t < T; t++) if (hard[t][s] & 3) cpen += 5;
     }
     pen += cpen;
-    vec[G + 2] = -pen;
+    vec[G + 3] = -pen;
     if (rec) {
       rec.total = total; rec.offMin = offMin;
       rec.dayMin = Array.from({ length: T }, (_, t) => Array.from(dayMin.subarray(t * D, t * D + D)));
       rec.sched = Array.from(sched); rec.conflictCount = conflicts;
+      rec.weekMin = Array.from(weekMin); rec.spread = spread;
     }
     return vec;
   }
@@ -439,11 +537,20 @@ function cmpVec(a, b) {
 }
 
 function mutate(ctx, st, rnd) {
-  const r = rnd();
   const { T, NN, N } = ctx;
+  const FF = ctx.freeFixed;
+  // many free fixed blocks (series period): spend more moves on who teaches them
+  if (FF.length >= 4 && T > 1 && rnd() < 0.15) {
+    const fi = FF[Math.floor(rnd() * FF.length)];
+    if (rnd() < 0.5) st.fa[fi] = (st.fa[fi] + 1 + Math.floor(rnd() * (T - 1))) % T;
+    else { const fj = FF[Math.floor(rnd() * FF.length)]; const x = st.fa[fi]; st.fa[fi] = st.fa[fj]; st.fa[fj] = x; }
+    return;
+  }
+  const r = rnd();
   if (r < 0.3 && NN > 0) {
     const tr = Math.floor(rnd() * T), n = Math.floor(rnd() * NN);
     const opts = ctx.sleepOpts[tr][n].length;
+    if (!opts) return;
     const i = tr * NN + n;
     if (rnd() < 0.5) st.sl[i] = Math.floor(rnd() * opts);
     else st.sl[i] = Math.max(0, Math.min(opts - 1, st.sl[i] + (rnd() < 0.5 ? -1 : 1) * (1 + Math.floor(rnd() * 2))));
@@ -455,7 +562,7 @@ function mutate(ctx, st, rnd) {
     else st.cl = Math.max(0, Math.min(L - 1, st.cl + Math.floor((rnd() - 0.5) * 9)));
   } else if (r < 0.5 && ctx.freeFixed.length) {
     const fi = ctx.freeFixed[Math.floor(rnd() * ctx.freeFixed.length)];
-    st.fa[fi] = (st.fa[fi] + 1 + Math.floor(rnd() * (T - 1))) % T;
+    if (T > 1) st.fa[fi] = (st.fa[fi] + 1 + Math.floor(rnd() * (T - 1))) % T;
   } else {
     const n = 1 + Math.floor(rnd() * 3);
     for (let j = 0; j < n; j++) {
@@ -514,15 +621,17 @@ function search(ctx, dec, { winKept, start, rnd, deadline, maxIter, onTick }) {
   return { state: best, vec: bestVec, iterations: it };
 }
 
+const seriesMinutes = (ctx) => ctx.fixed.reduce((a, f) => a + (f.series ? f.end - f.start : 0), 0);
+
 // ---------- capacity ----------
 export function estimateCapacity(config, { iterations = 600, seed = 7 } = {}) {
   const cfg = normalizeConfig(config);
-  cfg.types = [{ id: '__cap', name: 'cap', priority: 1, hours: 1000, duration: 120, allowShort: true }];
+  cfg.types = [{ id: '__cap', name: 'cap', priority: 1, hours: 1000, duration: 120, allowShort: true, blocked: [] }];
   cfg.fixed = cfg.fixed.map((f) => ({ ...f, typeId: null }));
   const ctx = buildCtx(cfg);
   const dec = makeDecoder(ctx);
   const res = search(ctx, dec, { winKept: !!ctx.win, rnd: mulberry32(seed), deadline: now() + 300, maxIter: iterations });
-  return res.vec[ctx.G + 1];
+  return res.vec[ctx.G + 1] - seriesMinutes(ctx);
 }
 
 // ---------- solve ----------
@@ -566,9 +675,19 @@ export function solve(config, { timeBudgetMs = 2500, seed, onProgress, iteration
     gain = r2.vec[ctx.G + 1] - r1.vec[ctx.G + 1];
     if (gain > ctx.win.tradeoff && cmpVec(r2.vec, r1.vec) > 0) { chosen = r2; kept = false; }
   }
+  // balance polish: only when the best schedule is still unbalanced and time remains
+  let polishIt = 0;
+  if (chosen.vec[ctx.G + 2] < 0 && now() < deadline - 50) {
+    const r3 = search(ctx, dec, {
+      winKept: kept, start: chosen.state, rnd, deadline, maxIter: maxIter === Infinity ? Infinity : 40000,
+      onTick: (v) => prog(((now() - t0) / timeBudgetMs) * 100, v),
+    });
+    polishIt = r3.iterations;
+    if (cmpVec(r3.vec, chosen.vec) > 0) chosen = { ...r3, iterations: chosen.iterations };
+  }
   dec.decode(chosen.state, kept, true);
-  const result = buildResult(ctx, chosen.state, dec.rec, kept, gain, Math.max(capacity, dec.rec.total), totalReq);
-  result.stats = { iterations: r1.iterations + (chosen === r1 ? 0 : chosen.iterations), ms: Math.round(now() - t0) };
+  const result = buildResult(ctx, chosen.state, dec.rec, kept, gain, Math.max(capacity, dec.rec.total - seriesMinutes(ctx)), totalReq);
+  result.stats = { iterations: r1.iterations + (chosen === r1 ? 0 : chosen.iterations) + polishIt, ms: Math.round(now() - t0) };
   if (onProgress) try { onProgress({ pct: 100, best: { totalMinutes: result.summary.totalMinutes } }); } catch { /* ignore */ }
   return result;
 }
@@ -586,10 +705,12 @@ function buildResult(ctx, st, rec, kept, gain, capacity, totalReq) {
   for (const f of ctx.fixed) {
     const tr = rec.fixedTr[f.i];
     const tdef = f.typeId ? cfg.types.find((t) => t.id === f.typeId) : null;
-    sessions.push({
-      id: f.id, typeId: f.typeId, label: f.label, trainerId: trId(tr), start: f.start, end: f.end,
+    const sess = {
+      id: f.id, typeId: f.series ? SERIES_TYPE : f.typeId, label: f.label, trainerId: trId(tr), start: f.start, end: f.end,
       fixed: true, short: !!(tdef && f.end - f.start < tdef.duration), offHours: isOff(f.start, f.end),
-    });
+    };
+    if (f.series) sess.series = true;
+    sessions.push(sess);
   }
   let n = 0;
   for (const s of rec.sessions) {
@@ -605,7 +726,9 @@ function buildResult(ctx, st, rec, kept, gain, capacity, totalReq) {
   const cleaning = { start: cs, end: cs + R.cleaningMinutes };
   const sleep = [];
   for (let tr = 0; tr < T; tr++) for (let i = 0; i < ctx.NN; i++) {
-    const s0 = ws + ctx.sleepOpts[tr][i][st.sl[tr * ctx.NN + i]] * slot;
+    const opts = ctx.sleepOpts[tr][i];
+    if (!opts.length) continue;
+    const s0 = ws + opts[st.sl[tr * ctx.NN + i]] * slot;
     sleep.push({ trainerId: trId(tr), start: s0, end: s0 + R.sleepMinutes });
   }
   const A = ctx.afterOpts[st.af];
@@ -618,7 +741,21 @@ function buildResult(ctx, st, rec, kept, gain, capacity, totalReq) {
   cfg.trainers.forEach((t, i) => { perTrainerDay[t.id] = rec.dayMin[i].slice(0, 5).concat(Array(Math.max(0, 5 - rec.dayMin[i].length)).fill(0)); });
   const totalMinutes = sessions.reduce((a, s) => a + (s.end - s.start), 0);
   const denom = R.weekEnd - R.weekStart - R.cleaningMinutes;
-  const summary = { perType, perTrainerDay, totalMinutes, capacityMinutes: capacity, utilization: denom > 0 ? totalMinutes / denom : 0 };
+  const perTrainer = {};
+  cfg.trainers.forEach((t, i) => {
+    perTrainer[t.id] = { minutes: perTrainerDay[t.id].reduce((a, b) => a + b, 0), availableDays: ctx.availDays[i] };
+  });
+  const sumAvail = ctx.availDays.reduce((a, b) => a + b, 0) || 1;
+  cfg.trainers.forEach((t, i) => { perTrainer[t.id].target = Math.round((totalMinutes * ctx.availDays[i]) / sumAvail); });
+  const proportional = new Set(ctx.availDays.filter((a) => a > 0)).size > 1;
+  const act = cfg.trainers.filter((t, i) => ctx.availDays[i] > 0).map((t) => perTrainer[t.id]);
+  // equal availability: plain max-min difference; otherwise the largest deviation from the fair share
+  const diffMinutes = act.length < 2 ? 0 : proportional
+    ? Math.round(Math.max(...act.map((p) => Math.abs(p.minutes - p.target))))
+    : Math.max(...act.map((p) => p.minutes)) - Math.min(...act.map((p) => p.minutes));
+  const balance = { diffMinutes, spreadMinutes: Math.round(rec.spread), balanced: rec.spread <= ctx.balTol + 1e-9, proportional };
+  const seriesMin = sessions.reduce((a, s) => a + (s.series ? s.end - s.start : 0), 0);
+  const summary = { perType, seriesMinutes: seriesMin, perTrainerDay, perTrainer, balance, totalMinutes, capacityMinutes: capacity, utilization: denom > 0 ? totalMinutes / denom : 0 };
 
   const result = { sessions, cleaning, sleep, after, thursdayWindowKept: !!(ctx.win && kept), summary, warnings: [], violations: [] };
   const W = result.warnings;
@@ -626,13 +763,17 @@ function buildResult(ctx, st, rec, kept, gain, capacity, totalReq) {
   const sortedTypes = [...cfg.types].sort((a, b) => a.priority - b.priority);
   for (const t of sortedTypes) {
     const p = perType[t.id];
-    if (p.requested > p.scheduled) W.push(`לא נכנסו ${hoursStr(p.requested - p.scheduled)} שעות ${t.name}`);
+    if (p.requested > p.scheduled) {
+      if (t.blocked.length && totalReq <= capacity) W.push(`${t.name}: נכנסו ${hoursStr(p.scheduled)} מתוך ${hoursStr(p.requested)} ש' בגלל אילוצים`);
+      else W.push(`לא נכנסו ${hoursStr(p.requested - p.scheduled)} שעות ${t.name}${t.blocked.length ? ' (יש גם אילוצים לסוג הזה)' : ''}`);
+    }
     if (p.requested % 30) W.push(`הדרישה ל${t.name} עוגלה לחצאי שעות`);
   }
   if (ctx.win) {
     if (ctx.win.brokenByFixed) W.push('אימון קבוע נופל בחלון הפנוי של יום חמישי');
     else if (!kept) W.push(`שבירת חלון חמישי הוסיפה ${gain} דק'`);
   }
+  if (!balance.balanced) W.push(`חלוקת השעות בין המאמנות לא מאוזנת לגמרי (${balance.proportional ? 'סטייה מהחלק היחסי' : 'הפרש'} של ${diffMinutes} דק')`);
   const offMin = sessions.filter((s) => !s.fixed && s.offHours).reduce((a, s) => a + s.end - s.start, 0);
   if (offMin) W.push(`שובצו ${offMin} דק' מחוץ לשעות המועדפות (${R.preferredStart}-${R.preferredEnd}) כדי להגדיל ניצול`);
   cfg.trainers.forEach((t) => {
@@ -642,11 +783,12 @@ function buildResult(ctx, st, rec, kept, gain, capacity, totalReq) {
   });
   result.violations = validate(cfg, result);
   const fixedIds = new Set(ctx.fixed.map((f) => f.id));
+  const seriesIds = new Set(ctx.fixed.filter((f) => f.series).map((f) => f.id));
   const seen = new Set();
   for (const v of result.violations) {
     const ids = v.sessionIds || [];
-    if (ids.some((id) => fixedIds.has(id)) || v.code === 'fixed') {
-      const msg = `אימון קבוע מתנגש בחוקים: ${v.message}`;
+    if (ids.some((id) => fixedIds.has(id)) || v.code === 'fixed' || v.code === 'series_missing') {
+      const msg = `${ids.some((id) => seriesIds.has(id)) || v.code === 'series_missing' ? 'בלוק סדרות' : 'אימון קבוע'} מתנגש בחוקים: ${v.message}`;
       if (!seen.has(msg)) { seen.add(msg); W.push(msg); }
     }
   }
@@ -668,7 +810,7 @@ export function validate(config, result) {
   for (const s of S) {
     if (!tName.has(s.trainerId)) push('trainer', `לאימון ${desc(s)} לא שובצה מאמנת תקינה`, { sessionIds: [s.id] });
     if (!(s.end > s.start)) push('duration', `לאימון ${desc(s)} משך לא תקין`, { sessionIds: [s.id] });
-    if (s.end - s.start > R.maxContinuous) push('max_continuous', `האימון ${desc(s)} ארוך מ-${R.maxContinuous} דק'`, { sessionIds: [s.id] });
+    if (s.end - s.start > R.maxContinuous && !(s.series && s.typeId === SERIES_TYPE && cfg.series.enabled)) push('max_continuous', `האימון ${desc(s)} ארוך מ-${R.maxContinuous} דק'`, { sessionIds: [s.id] });
     if (s.start < R.weekStart || s.end > R.weekEnd) push('outside_week', `האימון ${desc(s)} מחוץ לשבוע העבודה`, { sessionIds: [s.id] });
     if (!s.fixed) {
       const t = typeMap.get(s.typeId);
@@ -680,6 +822,23 @@ export function validate(config, result) {
       }
     }
   }
+  // per-type constraints (אילוצים): no session of the type inside a blocked range
+  for (const t of cfg.types) {
+    if (!t.blocked.length) continue;
+    const ranges = t.blocked.map(blockedRange);
+    for (const s of S) {
+      if (s.typeId !== t.id) continue;
+      const hit = ranges.find(([a, e]) => s.start < e && s.end > a);
+      if (hit) push('blocked', `האימון ${desc(s)} נופל באילוץ של ${t.name} (${when(hit[0])}–${fmt(hit[1])})`, { sessionIds: [s.id] });
+    }
+  }
+  // series blocks: each one present, exactly in place, one session
+  if (cfg.series.enabled) {
+    for (const b of seriesSessions(cfg)) {
+      const a = b.day * 1440 + parseHM(b.start), e = a + b.duration;
+      if (!S.some((s) => s.series && s.start === a && s.end === e)) push('series_missing', `חסר בלוק סדרות ${when(a)}`);
+    }
+  } else if (S.some((s) => s.series)) push('series_off', 'שובצו סדרות למרות שתקופת סדרות כבויה');
   // no overlaps at all
   for (let i = 0; i < S.length; i++) for (let j = i + 1; j < S.length && S[j].start < S[i].end; j++) {
     push('overlap', `האימונים ${desc(S[i])} ו-${desc(S[j])} חופפים`, { sessionIds: [S[i].id, S[j].id] });
@@ -705,6 +864,9 @@ export function validate(config, result) {
   }
   for (const tr of cfg.trainers) {
     const mine = S.filter((s) => s.trainerId === tr.id);
+    for (const s of mine) for (let d = Math.floor(s.start / 1440); d * 1440 < s.end; d++) {
+      if (!availOn(tr, d)) { push('unavailable', `${tr.name} לא זמינה ביום ${DAY_NAMES[d]} אך משובצת: ${desc(s)}`, { sessionIds: [s.id], trainerId: tr.id }); break; }
+    }
     for (let i = 1; i < mine.length; i++) {
       const gap = mine[i].start - mine[i - 1].end;
       if (gap >= 0 && gap < R.minBreak) push('break', `ל${tr.name} אין ${R.minBreak} דק' הפסקה בין ${desc(mine[i - 1])} ל-${desc(mine[i])}`, { sessionIds: [mine[i - 1].id, mine[i].id] });
@@ -712,6 +874,7 @@ export function validate(config, result) {
     // sleep
     const ts = sleeps.filter((z) => z.trainerId === tr.id);
     for (const n of nights) {
+      if (!availOn(tr, n.d + 1)) continue;
       const inN = ts.filter((z) => z.start >= n.a && z.start < n.b);
       const good = inN.find((z) => z.end - z.start >= R.sleepMinutes && z.end <= n.b);
       if (!good) { push('sleep', `ל${tr.name} אין בלוק שינה של ${R.sleepMinutes / 60} שעות בלילה שבין ${DAY_NAMES[n.d]} ל${DAY_NAMES[n.d + 1]} (${R.sleepWindowStart}-${R.sleepWindowEnd})`); continue; }
@@ -737,9 +900,8 @@ export function validate(config, result) {
     const aS = A.day * 1440 + parseHM(R.afterEnd), aE = (A.day + 1) * 1440 + parseHM(R.afterReturn);
     if (!nights.some((n) => n.d === A.day)) push('after', `יום האפטר (${DAY_NAMES[A.day] ?? A.day}) לא תקין`);
     if (A.start > aS || A.end < aE) push('after', 'חלון האפטר קצר מהנדרש');
-    if (cfg.after.mode === 'manual' && cfg.after.trainerId != null && cfg.after.day != null) {
-      if (A.trainerId !== cfg.after.trainerId || Number(A.day) !== Number(cfg.after.day)) push('after_manual', 'האפטר לא תואם להגדרה הידנית');
-    }
+    if (A.trainerId !== cfg.after.trainerId) push('after_trainer', `האפטר צריך להיות של ${tName.get(cfg.after.trainerId) ?? 'המאמנת שנקבעה'}`);
+    if (cfg.after.mode === 'manual' && cfg.after.day != null && Number(A.day) !== Number(cfg.after.day)) push('after_manual', 'יום האפטר לא תואם להגדרה הידנית');
     for (const s of S) if (s.trainerId === A.trainerId && s.start < aE && s.end > aS) {
       push('after_overlap', `${tName.get(A.trainerId)} באפטר אך מאמנת: ${desc(s)}`, { sessionIds: [s.id] });
     }

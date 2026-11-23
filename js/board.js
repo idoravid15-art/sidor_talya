@@ -15,13 +15,18 @@ function segments(start, end, weekStart, weekEnd) {
   return out;
 }
 
+const laneTag = t => t.name.trim().split(/\s+/).pop().slice(0, 1);
+
 export function renderLegend(el, config) {
-  const items = config.types.filter(t => t.hours > 0).map(t =>
+  const items = [...config.types].sort((a, b) => a.priority - b.priority).filter(t => t.hours > 0 || (config.fixed || []).some(f => f.typeId === t.id)).map(t =>
     `<li><span class="sw" style="background:${typeColor(t.id, config.types)}"></span>${esc(t.name)}</li>`);
+  if (config.series?.enabled) items.push(`<li><span class="sw" style="background:${typeColor('series')}"></span>סדרות</li>`);
   items.push(`<li><span class="sw" style="background:${typeColor(null)}"></span>אחר</li>`);
   items.push(`<li><span class="sw sw-clean"></span>יש"פ + ניקיון</li>`);
   items.push(`<li><span class="sw sw-sleep"></span>שינה (פס צד)</li>`);
   items.push(`<li><span class="sw sw-after"></span>אפטר (פס צד)</li>`);
+  if (config.trainers.some(t => t.days && t.days.length < 5)) items.push(`<li><span class="sw sw-unavail"></span>לא זמינה (פס צד)</li>`);
+  items.push(`<li><span class="flag">${config.trainers.map(t => esc(laneTag(t))).join(' ')}</span> פסי צד לפי מאמנת: ${config.trainers.map(t => esc(t.name)).join(', ')}</li>`);
   items.push(`<li><span class="sw sw-window"></span>חלון חמישי</li>`);
   items.push(`<li><span class="flag">1.5</span> מקוצר</li><li><span class="flag">📌</span> קבוע</li><li><span class="flag">☾</span> מחוץ לשעות</li>`);
   el.innerHTML = items.join('');
@@ -40,10 +45,10 @@ export function renderBoard(boardEl, tabsEl, result, config) {
     const name = sessionName(s, types);
     const tn = trainerName(s.trainerId, trainers);
     const c = typeColor(s.typeId, types);
-    const full = `${name}, ${rng(s.start, s.end)}, ${tn}${s.short ? ', מקוצר' : ''}${s.fixed ? ', קבוע' : ''}${s.offHours ? ', מחוץ לשעות המועדפות' : ''}`;
+    const full = `${name}, ${rng(s.start, s.end)}, ${tn}${s.short ? ', מקוצר' : ''}${s.series ? ', סדרות' : s.fixed ? ', קבוע' : ''}${s.offHours ? ', מחוץ לשעות המועדפות' : ''}`;
     for (const g of segments(s.start, s.end, wS, wE)) {
       dayMin[g.day] += g.d;
-      const flags = [s.short && '<span class="flag" aria-hidden="true">1.5</span>', s.fixed && '<span class="flag" aria-hidden="true">📌</span>', s.offHours && '<span class="flag" aria-hidden="true">☾</span>'].filter(Boolean).join('');
+      const flags = [s.short && '<span class="flag" aria-hidden="true">1.5</span>', s.fixed && !s.series && '<span class="flag" aria-hidden="true">📌</span>', s.offHours && '<span class="flag" aria-hidden="true">☾</span>'].filter(Boolean).join('');
       cols[g.day].blocks.push(`<div class="blk t${(tIdx[s.trainerId] ?? 0) + 1}${g.contTop ? ' cont-top' : ''}" role="listitem" style="--s:${g.s};--d:${g.d};--c:${c}" title="${esc(full)}">
         <span class="sr-only">${esc(full)}</span>
         <span aria-hidden="true"><span class="flags">${flags}</span><span class="bt">${esc(name)}</span><span class="bm">${rng(s.start, s.end)}</span><span class="bm tr">${esc(tn)}</span></span></div>`);
@@ -66,6 +71,11 @@ export function renderBoard(boardEl, tabsEl, result, config) {
     for (const g of segments(sl.start, sl.end, wS, wE)) cols[g.day].lanes[i].push(
       `<div class="sleep" role="listitem" style="top:calc(${g.s}px * var(--ppm));height:calc(${g.d}px * var(--ppm))" title="${esc(lbl)}"><span class="sr-only">${esc(lbl)}</span></div>`);
   }
+  trainers.forEach((t, i) => {
+    if (!t.days) return;
+    for (let d = 0; d < 5; d++) if (!t.days.includes(d)) cols[d].lanes[i].unshift(
+      `<div class="unavail" role="listitem" title="${esc(t.name)} לא זמינה ביום ${DAY_NAMES[d]}"><span class="sr-only">${esc(t.name)} לא זמינה ביום ${DAY_NAMES[d]}</span></div>`);
+  });
   if (result.after && result.after.start != null) {
     const a = result.after, i = tIdx[a.trainerId];
     if (i != null) {
@@ -92,10 +102,11 @@ export function renderBoard(boardEl, tabsEl, result, config) {
         ${shade.map(([s, l]) => `<div class="offhours" style="top:calc(${s}px * var(--ppm));height:calc(${l}px * var(--ppm))"></div>`).join('')}
         ${closed.map(([s, l]) => `<div class="closed" style="top:calc(${s}px * var(--ppm));height:calc(${l}px * var(--ppm))">מחוץ לשבוע</div>`).join('')}
         <div class="main-lane" role="list" aria-label="אימונים ביום ${DAY_NAMES[d]}">${c.blocks.join('')}</div>
-        <div class="lanes">${c.lanes.map((l, i) => `<div class="lane" role="list" aria-label="שינה ואפטר: ${esc(trainers[i].name)}"><span class="lane-tag" aria-hidden="true">${esc(trainers[i].name.trim().split(/\s+/).pop().slice(0, 1))}</span>${l.join('')}</div>`).join('')}</div>
+        <div class="lanes">${c.lanes.map((l, i) => `<div class="lane" role="list" aria-label="שינה ואפטר: ${esc(trainers[i].name)}"><span class="lane-tag" aria-hidden="true">${esc(laneTag(trainers[i]))}</span>${l.join('')}</div>`).join('')}</div>
       </div></section>`;
   }).join('');
 
+  boardEl.style.setProperty('--nl', trainers.length);
   boardEl.innerHTML = `<div class="axis" aria-hidden="true"><div class="axis-in">${axis.join('')}</div></div><div class="days" id="days">${days}</div>`;
 
   // mobile tabs

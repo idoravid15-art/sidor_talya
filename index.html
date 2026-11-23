@@ -60,6 +60,10 @@
       <h1 id="h1">דרישות השבוע</h1>
       <p class="lead">כמה שעות צריך מכל סוג אימון השבוע? הסדר כאן הוא סדר העדיפות.</p>
     </div>
+    <div class="panel series-panel">
+      <label class="switch series-switch"><input type="checkbox" id="seriesOn"><span class="switch-track" aria-hidden="true"></span><span><b>תקופת סדרות</b></span></label>
+      <p class="hint" id="seriesHint">כשפעיל: בלוקים קבועים של סדרות משובצים ראשונים (א' 18:00-22:00 · ב'-ד' 06:00-09:00 ו-18:00-22:00 · ה' 06:00-09:00), מאמנת אחת לכל בלוק. לא נספרים בדרישות.</p>
+    </div>
     <div class="capacity panel" id="capacity">
       <div class="capacity-top">
         <h2 class="panel-title">מד קיבולת</h2>
@@ -120,19 +124,22 @@
     <div class="settings-grid">
       <fieldset class="panel">
         <legend class="panel-title">מאמנות</legend>
-        <label class="field"><span>מאמנת ראשונה</span><input type="text" id="tName0" maxlength="20" autocomplete="off"></label>
-        <label class="field"><span>מאמנת שנייה</span><input type="text" id="tName1" maxlength="20" autocomplete="off"></label>
+        <p class="hint">השעות מתחלקות שווה בין המאמנות (ביחס לימים שכל אחת זמינה).</p>
+        <ul class="trainer-list" id="trainerList"></ul>
+        <button type="button" class="btn btn-ghost btn-sm" id="addTrainer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>הוספת מאמנת</button>
+        <p class="hint" id="trainerHint" aria-live="polite"></p>
       </fieldset>
 
       <fieldset class="panel">
         <legend class="panel-title">אפטר</legend>
-        <p class="hint">מאמנת אחת, ערב אחד: אין אימונים מ-<span id="afterEndTxt">17:00</span> ועד <span id="afterRetTxt">10:30</span> למחרת.</p>
-        <div class="seg" role="radiogroup" aria-label="קביעת אפטר">
+        <p class="hint">ערב אחד בשבוע: אין אימונים מ-<span id="afterEndTxt">17:00</span> ועד <span id="afterRetTxt">10:30</span> למחרת.</p>
+        <label class="field"><span>האפטר תמיד של</span><select id="afterTrainer"></select></label>
+        <p class="field-label" id="afterDayLbl">יום האפטר</p>
+        <div class="seg" role="radiogroup" aria-labelledby="afterDayLbl">
           <label><input type="radio" name="afterMode" value="auto"><span>אוטומטי</span></label>
           <label><input type="radio" name="afterMode" value="manual"><span>אני בוחרת</span></label>
         </div>
         <div class="form-grid" id="afterManual">
-          <label class="field"><span>מאמנת</span><select id="afterTrainer"></select></label>
           <label class="field"><span>יום</span><select id="afterDay"></select></label>
         </div>
       </fieldset>
