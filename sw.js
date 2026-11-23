@@ -1,5 +1,5 @@
 // Periscope Strategy service worker: versioned offline cache
-const VERSION = 'ps-v2';
+const VERSION = 'ps-v3';
 const CORE = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'js/app.js', 'js/ui-common.js', 'js/board.js', 'js/exports.js',

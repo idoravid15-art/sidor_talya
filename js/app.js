@@ -3,7 +3,7 @@ import * as engine from './engine.js';
 const { DEFAULT_CONFIG, fmt } = engine;
 const MAX_TRAINERS = engine.MAX_TRAINERS || 5;
 const LETTERS = ['א', 'ב', 'ג', 'ד', 'ה'];
-import { DAY_NAMES, DAY_SHORT, typeColor, toMin, hhmm, rng, hoursTxt, esc, sessionName, trainerName, timeOptions } from './ui-common.js';
+import { availMap, DAY_NAMES, DAY_SHORT, typeColor, toMin, hhmm, rng, hoursTxt, esc, sessionName, trainerName, timeOptions } from './ui-common.js';
 import { renderBoard, renderLegend } from './board.js';
 import { exportPrint, exportPNG, exportExcel } from './exports.js';
 
@@ -60,8 +60,11 @@ function migrateTrainers(saved) {
     ids.add(id);
     let name = typeof t?.name === 'string' && t.name.trim() ? t.name : def.name || `מאמנת ${i + 1}`;
     if (id === 't1' && name === LEGACY_T1) name = DEFAULT_CONFIG.trainers[0].name;
-    const days = Array.isArray(t?.days) ? t.days.filter(d => ALL_DAYS.includes(+d)).map(Number) : ALL_DAYS.slice();
-    return { id, name, isManager: 'isManager' in (t || {}) ? !!t.isManager : id === 't1', days: days.length ? days : ALL_DAYS.slice() };
+    // availability by day/hours; legacy `days` arrays become all-day entries
+    const src = availMap(t || {}), availability = {};
+    for (const [k, v] of Object.entries(src)) if (ALL_DAYS.includes(+k)) availability[+k] = v && v.from && v.to && toMin(v.from) < (toMin(v.to) || 1440) ? { from: v.from, to: v.to } : null;
+    if (!Object.keys(availability).length) ALL_DAYS.forEach(d => (availability[d] = null));
+    return { id, name, isManager: 'isManager' in (t || {}) ? !!t.isManager : id === 't1', availability };
   });
 }
 const afterOwner = c => engine.afterTrainerId ? engine.afterTrainerId(c) : (c.trainers.find(t => t.isManager) || c.trainers[0]).id;
@@ -115,8 +118,11 @@ function estimateCapacity(c) {
   let cap = 0;
   for (let d = 0; d < 5; d++) {
     const a = Math.max(d * 1440, wS), b = Math.min((d + 1) * 1440, wE);
-    const n = c.trainers.filter(t => !t.days || t.days.includes(d)).length;
-    if (b > a) cap += Math.min(b - a, n * dMax);
+    if (b > a) cap += Math.min(b - a, c.trainers.reduce((s, t) => {
+      if (!(d in availMap(t))) return s;
+      const r = availMap(t)[d], ra = d * 1440 + (r ? toMin(r.from) : 0), rb = d * 1440 + (r ? toMin(r.to) || 1440 : 1440);
+      return s + Math.min(dMax, Math.max(0, Math.min(b, rb) - Math.max(a, ra)));
+    }, 0));
   }
   cap -= r.cleaningMinutes ?? 60;
   cap -= seriesMinutes(c);
@@ -129,7 +135,7 @@ function estimateCapacity(c) {
 const capCache = { key: null, val: null, pending: null };
 function capacity(c) {
   if (typeof engine.estimateCapacity !== 'function') return estimateCapacity(c);
-  const key = JSON.stringify({ t: c.trainers.map(t => [t.id, t.days]), s: c.series, f: c.fixed, a: c.after, cl: c.cleaning, r: c.rules });
+  const key = JSON.stringify({ t: c.trainers.map(t => [t.id, t.availability]), s: c.series, f: c.fixed, a: c.after, cl: c.cleaning, r: c.rules });
   if (capCache.key === key && capCache.val != null) return capCache.val;
   if (capCache.pending !== key) {
     capCache.pending = key;
@@ -378,11 +384,24 @@ function initSettings() {
   list.addEventListener('change', e => {
     const i = +e.target.closest('[data-ti]')?.dataset.ti; if (e.target.dataset.day == null || isNaN(i)) return;
     const t = cfg().trainers[i], d = +e.target.dataset.day;
-    const days = new Set(t.days || ALL_DAYS);
-    if (e.target.checked) days.add(d); else days.delete(d);
-    if (!days.size) { e.target.checked = true; $('#trainerHint').textContent = 'כל מאמנת צריכה לפחות יום זמינות אחד.'; return; }
-    t.days = [...days].sort(); $('#trainerHint').textContent = '';
-    changed();
+    const av = t.availability ||= availMap(t);
+    if (!e.target.checked && Object.keys(av).length <= 1) { e.target.checked = true; $('#trainerHint').textContent = 'כל מאמנת צריכה לפחות יום זמינות אחד.'; return; }
+    if (e.target.checked) av[d] = null; else delete av[d];
+    $('#trainerHint').textContent = '';
+    renderTrainers(`[data-ti="${i}"] [data-day="${d}"]`); changed();
+  });
+  list.addEventListener('change', e => {
+    const row = e.target.closest('.hrs-row'); if (!row) return;
+    const i = +e.target.closest('[data-ti]').dataset.ti, d = +row.dataset.d, t = cfg().trainers[i];
+    const av = t.availability ||= availMap(t);
+    if (e.target.dataset.h === 'mode') av[d] = e.target.value === 'range' ? { from: '08:00', to: '16:00' } : null;
+    else {
+      const from = row.querySelector('[data-h=from]').value, to = row.querySelector('[data-h=to]').value;
+      if (toMin(from) >= (toMin(to) || 1440)) { $('#trainerHint').textContent = 'שעת הסיום צריכה להיות אחרי שעת ההתחלה.'; e.target.value = e.target.dataset.h === 'from' ? av[d].from : av[d].to; return; }
+      av[d] = { from, to };
+    }
+    $('#trainerHint').textContent = '';
+    renderTrainers(`[data-ti="${i}"] .hrs-row[data-d="${d}"] [data-h=${e.target.dataset.h}]`); changed();
   });
   list.addEventListener('click', e => {
     const b = e.target.closest('[data-act=del]'); if (!b) return;
@@ -398,7 +417,7 @@ function initSettings() {
   $('#addTrainer').addEventListener('click', () => {
     const c = cfg(); if (c.trainers.length >= MAX_TRAINERS) return;
     let n = c.trainers.length + 1; while (c.trainers.some(t => t.id === 't' + n)) n++;
-    c.trainers.push({ id: 't' + n, name: defaultName(c.trainers.length), days: ALL_DAYS.slice() });
+    c.trainers.push({ id: 't' + n, name: defaultName(c.trainers.length), availability: { 0: null, 1: null, 2: null, 3: null, 4: null } });
     renderSettings(); changed();
     const inputs = $$('#trainerList input[data-act=name]'); inputs[inputs.length - 1]?.focus(); inputs[inputs.length - 1]?.select();
   });
@@ -436,10 +455,20 @@ function syncTexts() {
   $('#thuTradeTxt').textContent = tw.tradeoffMinutes;
 }
 const defaultName = i => (i === 0 ? DEFAULT_CONFIG.trainers[0].name : `מאמנת ${LETTERS[i] || i + 1}`);
-function renderTrainers() {
+function hoursRows(t) {
+  const av = availMap(t), from = timeOptions(0, 1410), to = timeOptions(30, 1440);
+  const opts = (arr, v) => arr.map(x => `<option ${x === v ? 'selected' : ''}>${x}</option>`).join('');
+  return Object.keys(av).map(Number).filter(d => ALL_DAYS.includes(d)).sort().map(d => {
+    const r = av[d], lbl = `${t.name}, ${DAY_NAMES[d]}`;
+    return `<div class="hrs-row" data-d="${d}"><span class="hrs-day" aria-hidden="true">${DAY_NAMES[d]}</span>
+      <select data-h="mode" aria-label="שעות זמינות: ${esc(lbl)}"><option value="all" ${r ? '' : 'selected'}>כל היום</option><option value="range" ${r ? 'selected' : ''}>שעות…</option></select>
+      ${r ? `<span class="hrs-range"><select data-h="from" aria-label="מ-, ${esc(lbl)}">${opts(from, r.from)}</select><span class="dash" aria-hidden="true">–</span><select data-h="to" aria-label="עד, ${esc(lbl)}">${opts(to, r.to)}</select></span>` : ''}</div>`;
+  }).join('');
+}
+function renderTrainers(focusSel) {
   const c = cfg(), owner = afterOwner(c), one = c.trainers.length <= 1;
   $('#trainerList').innerHTML = c.trainers.map((t, i) => {
-    const days = t.days || ALL_DAYS, isOwner = t.id === owner;
+    const days = Object.keys(availMap(t)).map(Number), isOwner = t.id === owner;
     return `<li class="trainer-row" data-ti="${i}">
       <div class="trainer-top">
         <label class="field"><span>מאמנת ${i + 1}${isOwner ? '<span class="trainer-badge">· האפטר שלה</span>' : ''}</span><input type="text" data-act="name" maxlength="20" autocomplete="off" value="${esc(t.name)}"></label>
@@ -447,8 +476,10 @@ function renderTrainers() {
       </div>
       <fieldset class="day-checks"><legend>ימים זמינים</legend>
         ${ALL_DAYS.map(d => `<label class="day-check"><input type="checkbox" data-day="${d}" ${days.includes(d) ? 'checked' : ''} aria-label="${esc(t.name)} זמינה ביום ${DAY_NAMES[d]}"><span aria-hidden="true">${DAY_SHORT[d]}</span></label>`).join('')}
-      </fieldset></li>`;
+      </fieldset>
+      <div class="hrs" role="group" aria-label="שעות זמינות: ${esc(t.name)}">${hoursRows(t)}</div></li>`;
   }).join('');
+  if (typeof focusSel === 'string') $(focusSel)?.focus();
   const add = $('#addTrainer');
   add.disabled = c.trainers.length >= MAX_TRAINERS;
   add.title = add.disabled ? `עד ${MAX_TRAINERS} מאמנות` : '';
@@ -588,19 +619,19 @@ function renderResult(opts = {}) {
 
   const loads = c.trainers.map(t => {
     const p = sm.perTrainer?.[t.id];
-    const days = p?.availableDays ?? (t.days || ALL_DAYS).length;
-    return [t.name, p?.minutes ?? (sm.perTrainerDay?.[t.id] || []).reduce((a, b) => a + b, 0), days];
+    const av = availMap(t), days = Object.keys(av).length, partial = days < 5 || Object.values(av).some(Boolean);
+    return [t.name, p?.minutes ?? (sm.perTrainerDay?.[t.id] || []).reduce((a, b) => a + b, 0), partial ? (p?.availableMinutes != null ? `${hoursTxt(p.availableMinutes)} ש' זמינות` : `${days} ימים`) : ''];
   });
   const mins = loads.map(l => l[1]);
-  const prop = new Set(loads.map(l => l[2])).size > 1;
+  const prop = sm.balance?.proportional ?? loads.some(l => l[2]);
   const diff = sm.balance?.diffMinutes ?? (mins.length > 1 ? Math.max(...mins) - Math.min(...mins) : 0);
   const balanced = sm.balance ? sm.balance.balanced : diff <= 30;
   const dTxt = diff ? ` · ${prop ? 'סטייה מהחלק היחסי' : 'הפרש'} ${diff} דק'` : '';
   const balTxt = loads.length < 2 ? '' : balanced
-    ? `<span class="balance ok">✓ מאוזן${prop ? ' ביחס לימי זמינות' : ''}${dTxt}</span>`
+    ? `<span class="balance ok">✓ מאוזן${prop ? ' ביחס לשעות הזמינות' : ''}${dTxt}</span>`
     : `<span class="balance off">! לא מאוזן${dTxt}</span>`;
   $('#util').innerHTML = ring(sm.utilization || 0) + `<div><p class="util-sub">${hoursTxt(sm.totalMinutes || 0)} ש' אימון מתוך ${hoursTxt(sm.capacityMinutes || 0)} ש' זמינות</p>
-    <ul class="trainer-load" aria-label="שעות שבועיות לכל מאמנת">${loads.map(([n, m, d]) => `<li><span>${esc(n)}${d < 5 ? `<small>(${d} ימים)</small>` : ''}</span><b>${hoursTxt(m)} ש'</b></li>`).join('')}</ul>${balTxt}</div>`;
+    <ul class="trainer-load" aria-label="שעות שבועיות לכל מאמנת">${loads.map(([n, m, d]) => `<li><span>${esc(n)}${d ? `<small>(${esc(d)})</small>` : ''}</span><b>${hoursTxt(m)} ש'</b></li>`).join('')}</ul>${balTxt}</div>`;
 
   $('#gauges').innerHTML = c.types.map(t => {
     const p = sm.perType?.[t.id] || { requested: Math.round(t.hours * 60), scheduled: 0 };

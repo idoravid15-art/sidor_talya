@@ -44,6 +44,24 @@ export function trainerName(id, trainers) {
   const t = trainers.find(t => t.id === id);
   return t ? t.name : '';
 }
+// trainer availability { [day]: null (all day) | {from, to} }; legacy `days` arrays become all-day entries
+export function availMap(t) {
+  if (t && t.availability && typeof t.availability === 'object') return t.availability;
+  const ds = Array.isArray(t?.days) ? t.days : [0, 1, 2, 3, 4];
+  return Object.fromEntries(ds.map(d => [d, null]));
+}
+export const availDays = t => Object.keys(availMap(t)).map(Number).filter(d => d >= 0 && d <= 4).sort();
+// unavailable [start, length] segments (minutes of day) for day d
+export function offSegments(t, d) {
+  const m = availMap(t);
+  if (!(d in m)) return [[0, 1440]];
+  const r = m[d]; if (!r) return [];
+  const a = toMin(r.from), b = toMin(r.to) || 1440, out = [];
+  if (a > 0) out.push([0, a]);
+  if (b < 1440) out.push([b, 1440 - b]);
+  return out;
+}
+export const availText = (t, d) => { const r = availMap(t)[d]; return r ? `${r.from}-${r.to}` : 'כל היום'; };
 export function timeOptions(from = 0, to = 1410, step = 30) {
   const out = [];
   for (let m = from; m <= to; m += step) out.push(m === 1440 ? '24:00' : hhmm(m));

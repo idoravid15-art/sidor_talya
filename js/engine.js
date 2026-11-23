@@ -5,8 +5,8 @@ export const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', '�
 
 export const DEFAULT_CONFIG = {
   trainers: [
-    { id: 't1', name: 'טליה', isManager: true, days: [0, 1, 2, 3, 4] },
-    { id: 't2', name: 'מאמנת ב', days: [0, 1, 2, 3, 4] },
+    { id: 't1', name: 'טליה', isManager: true, availability: { 0: null, 1: null, 2: null, 3: null, 4: null } },
+    { id: 't2', name: 'מאמנת ב', availability: { 0: null, 1: null, 2: null, 3: null, 4: null } },
   ],
   types: [
     { id: 'maamanot', name: 'מאמנות', priority: 1, hours: 0, duration: 120, allowShort: true },
@@ -90,8 +90,8 @@ export function normalizeConfig(config = {}) {
   const trainers = (c.trainers && c.trainers.length ? c.trainers : d.trainers).slice(0, MAX_TRAINERS)
     .map((t, i) => ({
       id: t.id ?? `t${i + 1}`, name: t.name ?? `מאמנת ${i + 1}`, isManager: !!t.isManager,
-      days: Array.isArray(t.days) ? [...new Set(t.days.map(Number).filter((x) => Number.isInteger(x) && x >= 0 && x <= 6))].sort() : ALL_DAYS.slice(),
-    }));
+      availability: normAvailability(t),
+    })).map((t) => ({ ...t, days: Object.keys(t.availability).map(Number).sort() }));
   const after = { ...d.after, ...(c.after || {}) };
   after.trainerId = afterTrainerId({ trainers, after });
   const types = (c.types && c.types.length ? c.types : d.types).map((t, i) => {
@@ -144,7 +144,34 @@ export function afterTrainerId(config) {
   if (want != null && T.some((t) => t.id === want)) return want;
   return (T.find((t) => t.isManager) || T[0] || {}).id ?? null;
 }
-const availOn = (t, d) => !Array.isArray(t.days) || t.days.includes(d);
+// trainer availability: { [day]: null (all day) | {from, to} } ; legacy `days` array → all-day entries
+export function normAvailability(t) {
+  const out = {};
+  const okDay = (d) => Number.isInteger(d) && d >= 0 && d <= 6;
+  if (t && t.availability && typeof t.availability === 'object') {
+    for (const [k, v] of Object.entries(t.availability)) {
+      const d = Number(k);
+      if (!okDay(d)) continue;
+      if (v && v.from != null && v.to != null) {
+        const a = parseHM(v.from), b = parseHM(v.to) || 1440;
+        out[d] = a === 0 && b >= 1440 ? null : b > a ? { from: v.from, to: b >= 1440 ? '24:00' : v.to } : null;
+      } else out[d] = null;
+    }
+    return out;
+  }
+  const days = t && Array.isArray(t.days) ? t.days.map(Number).filter(okDay) : ALL_DAYS;
+  for (const d of days) out[d] = null;
+  return out;
+}
+const availMap = (t) => (t.availability && typeof t.availability === 'object' ? t.availability : normAvailability(t));
+const availOn = (t, d) => d in availMap(t);
+// [start, end) minutes-of-day the trainer may teach on day d, or null when unavailable
+function dayRange(t, d) {
+  const m = availMap(t);
+  if (!(d in m)) return null;
+  const r = m[d];
+  return r ? [parseHM(r.from), parseHM(r.to) || 1440] : [0, 1440];
+}
 
 // ---------- context ----------
 function buildCtx(cfg) {
@@ -216,14 +243,19 @@ function buildCtx(cfg) {
     win.brokenByFixed = fixed.some((f) => f.start < en && f.end > st);
   }
 
-  // availability: an unavailable calendar day blocks the whole day for that trainer
+  // availability: outside a trainer's day/hour ranges she cannot teach
   const avail = cfg.trainers.map((t) => Array.from({ length: Math.max(D, 7) }, (_, d) => availOn(t, d)));
   const availDays = avail.map((a) => a.slice(0, D).filter(Boolean).length);
-  const baseHard = avail.map((a) => {
+  const availMin = cfg.trainers.map(() => 0);
+  const baseHard = cfg.trainers.map((t, tr) => {
     const h = new Uint8Array(N);
-    for (let s = 0; s < N; s++) if (!a[dayOfSlot[s]]) h[s] = 4;
+    for (let s = 0; s < N; s++) {
+      const m = ws + s * slot, tod = m % 1440, r = dayRange(t, dayOfSlot[s]);
+      if (!r || tod < r[0] || tod + slot > r[1]) h[s] = 4; else availMin[tr] += slot;
+    }
     return h;
   });
+  const fullMin = N * slot;
 
   // nights & sleep options
   const sws = parseHM(R.sleepWindowStart), swe = parseHM(R.sleepWindowEnd);
@@ -283,9 +315,10 @@ function buildCtx(cfg) {
     cfg, R, slot, ws, we, N, T, brk, maxK, D, off, dayOfSlot, types, G, fixed, freeFixed, win,
     nights, NN, sleepK, sleepOpts, afterOpts, CK, cleanOpts, avail, availDays, baseHard,
     // balance weight: minutes are compared per available day (scaled to a 5-day week)
-    balW: availDays.map((a) => (a > 0 ? 5 / a : 0)),
+    availMin,
+    balW: availMin.map((a) => (a > 0 ? fullMin / a : 0)),
     // tolerance: 30 real minutes for the trainer with the fewest days
-    balTol: 30 * Math.max(1, ...availDays.filter((a) => a > 0).map((a) => 5 / a)),
+    balTol: 30 * Math.max(1, ...availMin.filter((a) => a > 0).map((a) => fullMin / a)),
     cap: R.dailyMax, capSoft: Math.max(R.dailyMax, R.dailyMaxSoft),
   };
 }
@@ -743,12 +776,12 @@ function buildResult(ctx, st, rec, kept, gain, capacity, totalReq) {
   const denom = R.weekEnd - R.weekStart - R.cleaningMinutes;
   const perTrainer = {};
   cfg.trainers.forEach((t, i) => {
-    perTrainer[t.id] = { minutes: perTrainerDay[t.id].reduce((a, b) => a + b, 0), availableDays: ctx.availDays[i] };
+    perTrainer[t.id] = { minutes: perTrainerDay[t.id].reduce((a, b) => a + b, 0), availableDays: ctx.availDays[i], availableMinutes: ctx.availMin[i] };
   });
-  const sumAvail = ctx.availDays.reduce((a, b) => a + b, 0) || 1;
-  cfg.trainers.forEach((t, i) => { perTrainer[t.id].target = Math.round((totalMinutes * ctx.availDays[i]) / sumAvail); });
-  const proportional = new Set(ctx.availDays.filter((a) => a > 0)).size > 1;
-  const act = cfg.trainers.filter((t, i) => ctx.availDays[i] > 0).map((t) => perTrainer[t.id]);
+  const sumAvail = ctx.availMin.reduce((a, b) => a + b, 0) || 1;
+  cfg.trainers.forEach((t, i) => { perTrainer[t.id].target = Math.round((totalMinutes * ctx.availMin[i]) / sumAvail); });
+  const proportional = new Set(ctx.availMin.filter((a) => a > 0)).size > 1;
+  const act = cfg.trainers.filter((t, i) => ctx.availMin[i] > 0).map((t) => perTrainer[t.id]);
   // equal availability: plain max-min difference; otherwise the largest deviation from the fair share
   const diffMinutes = act.length < 2 ? 0 : proportional
     ? Math.round(Math.max(...act.map((p) => Math.abs(p.minutes - p.target))))
@@ -865,7 +898,10 @@ export function validate(config, result) {
   for (const tr of cfg.trainers) {
     const mine = S.filter((s) => s.trainerId === tr.id);
     for (const s of mine) for (let d = Math.floor(s.start / 1440); d * 1440 < s.end; d++) {
-      if (!availOn(tr, d)) { push('unavailable', `${tr.name} לא זמינה ביום ${DAY_NAMES[d]} אך משובצת: ${desc(s)}`, { sessionIds: [s.id], trainerId: tr.id }); break; }
+      const r = dayRange(tr, d);
+      if (!r) { push('unavailable', `${tr.name} לא זמינה ביום ${DAY_NAMES[d]} אך משובצת: ${desc(s)}`, { sessionIds: [s.id], trainerId: tr.id }); break; }
+      const a = Math.max(s.start, d * 1440) - d * 1440, b = Math.min(s.end, (d + 1) * 1440) - d * 1440;
+      if (a < r[0] || b > r[1]) { push('unavailable', `${tr.name} זמינה ביום ${DAY_NAMES[d]} רק ${fmt(r[0])}-${r[1] >= 1440 ? '24:00' : fmt(r[1])}, אך משובצת: ${desc(s)}`, { sessionIds: [s.id], trainerId: tr.id }); break; }
     }
     for (let i = 1; i < mine.length; i++) {
       const gap = mine[i].start - mine[i - 1].end;

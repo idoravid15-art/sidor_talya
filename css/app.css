@@ -207,13 +207,22 @@ input:focus-visible, select:focus-visible { border-color: var(--focus); }
 .day-check input:checked + span { background: var(--blue); border-color: var(--blue-hi); color: #fff; }
 .day-check input:checked + span::before { content: "✓"; margin-inline-end: 3px; font-size: .8em; }
 .day-check input:focus-visible + span { outline: 3px solid var(--focus); outline-offset: 1px; }
+.hrs { display: grid; gap: 6px; }
+.hrs-row { display: grid; grid-template-columns: 3.6em auto 1fr; align-items: center; gap: 6px; }
+.hrs-row > select { justify-self: start; }
+@media (max-width: 520px) { .hrs-row { grid-template-columns: 3.6em 1fr; } .hrs-range { grid-column: 2; } }
+.hrs-day { min-width: 3.6em; font-size: .88rem; color: var(--muted); font-weight: 600; }
+.hrs-row select { width: auto; min-width: 0; flex: 0 1 auto; padding-block: 6px; padding-inline: 10px 30px; background-position: left 10px center; }
+.hrs-row .dash { color: var(--dim); }
+.hrs-range { display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap; justify-self: start; }
+.hrs-row select { font-size: .92rem; padding-inline: 8px 26px; background-position: left 8px center; }
 .field-label { margin: 14px 0 0; font-size: .9rem; color: var(--muted); font-weight: 500; }
 .field-label + .seg { margin-top: 6px; }
 .balance { display: inline-block; margin-top: 4px; font-size: .82rem; font-weight: 700; padding: 1px 8px; border-radius: 4px; }
 .balance.ok { color: var(--ok); border: 1px solid currentColor; }
 .balance.off { color: var(--orange); border: 1px solid currentColor; }
 .trainer-load small { color: var(--dim); font-weight: 500; margin-inline-start: 4px; }
-.lane .unavail { position: absolute; inset: 0; background: repeating-linear-gradient(45deg, rgba(0,0,0,.45) 0 4px, rgba(255,255,255,.06) 4px 8px); }
+.lane .unavail { position: absolute; left: 0; right: 0; background: repeating-linear-gradient(45deg, rgba(0,0,0,.45) 0 4px, rgba(255,255,255,.06) 4px 8px); }
 
 .switch { display: flex; align-items: center; gap: 12px; cursor: pointer; min-height: 44px; position: relative; font-weight: 500; }
 .switch input { position: absolute; opacity: 0; width: 52px; height: 30px; margin: 0; cursor: pointer; }

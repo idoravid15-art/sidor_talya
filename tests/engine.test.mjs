@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { solve, validate, DEFAULT_CONFIG, fmt, dayOf, parseHM } from '../js/engine.js';
+import { solve, validate, DEFAULT_CONFIG, fmt, dayOf, parseHM, normalizeConfig } from '../js/engine.js';
 
 const OPTS = { seed: 42, timeBudgetMs: 400 };
 function cfgWith(hours, patch = {}) {
@@ -23,9 +23,10 @@ function checkHard(cfg, r) {
   // daily caps
   for (const days of Object.values(r.summary.perTrainerDay)) for (const m of days) assert.ok(m <= R.dailyMaxSoft);
   // sleep blocks inside window, 4 nights per trainer
-  for (const tr of cfg.trainers) {
+  const ncfg = normalizeConfig(cfg);
+  for (const tr of ncfg.trainers) {
     const sl = r.sleep.filter((z) => z.trainerId === tr.id);
-    const days = tr.days || [0, 1, 2, 3, 4];
+    const days = tr.days;
     assert.equal(sl.length, [1, 2, 3, 4].filter((d) => days.includes(d)).length);
     sl.forEach((z) => {
       const n = Math.floor((z.start - 720) / 1440); // night index (start in [20:00, 04:00])
@@ -34,9 +35,15 @@ function checkHard(cfg, r) {
       assert.equal(z.end - z.start, R.sleepMinutes);
     });
   }
-  // unavailable days: no training that calendar day
-  for (const tr of cfg.trainers) if (tr.days) for (const s of r.sessions.filter((x) => x.trainerId === tr.id)) {
-    for (let d = Math.floor(s.start / 1440); d * 1440 < s.end; d++) assert.ok(tr.days.includes(d), `${tr.id} on day ${d}`);
+  // availability: only inside the trainer's day/hour ranges
+  for (const tr of ncfg.trainers) for (const s of r.sessions.filter((x) => x.trainerId === tr.id)) {
+    for (let d = Math.floor(s.start / 1440); d * 1440 < s.end; d++) {
+      assert.ok(d in tr.availability, `${tr.id} on day ${d}`);
+      const rg = tr.availability[d];
+      if (!rg) continue;
+      const a = Math.max(s.start, d * 1440) - d * 1440, b = Math.min(s.end, (d + 1) * 1440) - d * 1440;
+      assert.ok(a >= parseHM(rg.from) && b <= (parseHM(rg.to) || 1440), `${tr.id} outside hours on day ${d}`);
+    }
   }
   // after always on the configured (default: manager) trainer
   assert.equal(r.after.trainerId, cfg.after?.trainerId ?? 't1');
@@ -126,7 +133,7 @@ test('3 trainers, reservist Mon-Wed: availability, sleep, proportional balance',
   const pt = r.summary.perTrainer;
   assert.equal(pt.t3.availableDays, 3);
   assert.ok(Math.abs(pt.t1.minutes - pt.t2.minutes) <= 60, JSON.stringify(weekMins(r)));
-  assert.ok(Math.abs(pt.t3.minutes * 5 / 3 - pt.t1.minutes) <= 120, JSON.stringify(weekMins(r)));
+  assert.ok(Math.abs(pt.t3.minutes * pt.t1.availableMinutes / pt.t3.availableMinutes - pt.t1.minutes) <= 120, JSON.stringify(weekMins(r)));
 });
 
 test('N trainers 1..5 produce valid schedules; fixed session trainer t3', () => {
@@ -144,7 +151,7 @@ test('N trainers 1..5 produce valid schedules; fixed session trainer t3', () => 
 
 test('trainer unavailable day: validate flags sessions on it', () => {
   const c = cfgWith(LIGHT);
-  c.trainers[1].days = [0, 1, 2];
+  c.trainers[1].availability = { 0: null, 1: null, 2: null };
   const r = solve(c, OPTS);
   checkHard(c, r);
   assert.ok(r.sessions.filter((s) => s.trainerId === 't2').every((s) => s.end <= 3 * 1440));
@@ -303,4 +310,42 @@ test('type constraints: validate catches injected violation; heavy constraints w
   bad.sessions.push({ id: 'inj', typeId: 'kamas', label: 'קמ"ס', trainerId: 't1', start: 1440 + 600, end: 1440 + 720, fixed: false });
   const v = validate(c, bad).find((x) => x.code === 'blocked');
   assert.ok(v && v.message.includes('קמ"ס'));
+});
+
+// ---------- availability by hours ----------
+test('legacy days array migrates to all-day availability', () => {
+  const n = normalizeConfig({ trainers: [{ id: 't1', name: 'א', days: [1, 3] }] });
+  assert.deepEqual(n.trainers[0].availability, { 1: null, 3: null });
+  assert.deepEqual(n.trainers[0].days, [1, 3]);
+});
+
+test('hour ranges respected; balance proportional to available minutes', () => {
+  const c = cfgWith(TYPICAL);
+  const rg = { from: '08:00', to: '16:00' };
+  c.trainers.push({ id: 't3', name: 'מילואימניקית', availability: { 1: rg, 2: rg, 3: rg, 4: { from: '08:00', to: '14:00' } } });
+  const r = solve(c, { seed: 3, timeBudgetMs: 2500 });
+  checkHard(c, r);
+  const pt = r.summary.perTrainer;
+  assert.equal(pt.t3.availableMinutes, 3 * 480 + 360);
+  assert.ok(pt.t3.minutes > 0);
+  // full-time trainers split evenly; the part-timer gets about her share of available minutes
+  assert.ok(Math.abs(pt.t1.minutes - pt.t2.minutes) <= 60, JSON.stringify(weekMins(r)));
+  assert.ok(Math.abs(pt.t3.minutes - pt.t3.target) <= 120, JSON.stringify(pt));
+});
+
+test('hour ranges: validate catches injected violation; fixed session outside range warns', () => {
+  const c = cfgWith(LIGHT, {
+    fixed: [{ id: 'fxo', typeId: null, label: 'ביקור', day: 1, start: '18:00', duration: 60, trainerId: 't2' }],
+  });
+  c.trainers[1].availability = { 0: null, 1: { from: '10:00', to: '16:00' }, 2: null, 3: null, 4: null };
+  const r = solve(c, OPTS);
+  assert.ok(r.violations.some((v) => v.code === 'unavailable' && v.message.includes('10:00')));
+  assert.ok(r.warnings.some((w) => w.includes('אימון קבוע')));
+  const c2 = cfgWith(LIGHT);
+  c2.trainers[1].availability = { 0: null, 1: { from: '10:00', to: '16:00' }, 2: null, 3: null, 4: null };
+  const r2 = solve(c2, OPTS);
+  checkHard(c2, r2);
+  const bad = structuredClone(r2);
+  bad.sessions.push({ id: 'x', typeId: null, label: 'x', trainerId: 't2', start: 1440 + 1080, end: 1440 + 1140, fixed: true });
+  assert.ok(validate(c2, bad).some((v) => v.code === 'unavailable'));
 });

@@ -1,5 +1,5 @@
 // Weekly board renderer (DOM). Desktop: 5 day columns + time axis. Mobile: swipe/tabs per day.
-import { DAY_NAMES, typeColor, hhmm, rng, hoursTxt, esc, sessionName, trainerName, toMin } from './ui-common.js';
+import { availMap, offSegments, DAY_NAMES, typeColor, hhmm, rng, hoursTxt, esc, sessionName, trainerName, toMin } from './ui-common.js';
 
 const DAY = 1440;
 
@@ -25,7 +25,7 @@ export function renderLegend(el, config) {
   items.push(`<li><span class="sw sw-clean"></span>יש"פ + ניקיון</li>`);
   items.push(`<li><span class="sw sw-sleep"></span>שינה (פס צד)</li>`);
   items.push(`<li><span class="sw sw-after"></span>אפטר (פס צד)</li>`);
-  if (config.trainers.some(t => t.days && t.days.length < 5)) items.push(`<li><span class="sw sw-unavail"></span>לא זמינה (פס צד)</li>`);
+  if (config.trainers.some(t => [0, 1, 2, 3, 4].some(d => offSegments(t, d).length))) items.push(`<li><span class="sw sw-unavail"></span>לא זמינה (פס צד)</li>`);
   items.push(`<li><span class="flag">${config.trainers.map(t => esc(laneTag(t))).join(' ')}</span> פסי צד לפי מאמנת: ${config.trainers.map(t => esc(t.name)).join(', ')}</li>`);
   items.push(`<li><span class="sw sw-window"></span>חלון חמישי</li>`);
   items.push(`<li><span class="flag">1.5</span> מקוצר</li><li><span class="flag">📌</span> קבוע</li><li><span class="flag">☾</span> מחוץ לשעות</li>`);
@@ -72,9 +72,12 @@ export function renderBoard(boardEl, tabsEl, result, config) {
       `<div class="sleep" role="listitem" style="top:calc(${g.s}px * var(--ppm));height:calc(${g.d}px * var(--ppm))" title="${esc(lbl)}"><span class="sr-only">${esc(lbl)}</span></div>`);
   }
   trainers.forEach((t, i) => {
-    if (!t.days) return;
-    for (let d = 0; d < 5; d++) if (!t.days.includes(d)) cols[d].lanes[i].unshift(
-      `<div class="unavail" role="listitem" title="${esc(t.name)} לא זמינה ביום ${DAY_NAMES[d]}"><span class="sr-only">${esc(t.name)} לא זמינה ביום ${DAY_NAMES[d]}</span></div>`);
+    for (let d = 0; d < 5; d++) {
+      const r = availMap(t)[d];
+      const lbl = d in availMap(t) ? `${t.name} זמינה ביום ${DAY_NAMES[d]} רק ${r ? r.from + '-' + r.to : ''}` : `${t.name} לא זמינה ביום ${DAY_NAMES[d]}`;
+      offSegments(t, d).forEach(([s, l], k) => cols[d].lanes[i].unshift(
+        `<div class="unavail" role="listitem" style="top:calc(${s}px * var(--ppm));height:calc(${l}px * var(--ppm))" title="${esc(lbl)}">${k ? '' : `<span class="sr-only">${esc(lbl)}</span>`}</div>`));
+    }
   });
   if (result.after && result.after.start != null) {
     const a = result.after, i = tIdx[a.trainerId];

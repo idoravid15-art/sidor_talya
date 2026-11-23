@@ -1,5 +1,5 @@
 // Exports: print/PDF, PNG (canvas + Web Share), Excel (SheetJS lazy) with CSV fallback
-import { DAY_NAMES, typeColor, hhmm, rng, hoursTxt, sessionName, trainerName, toMin } from './ui-common.js';
+import { availMap, availText, offSegments, DAY_NAMES, typeColor, hhmm, rng, hoursTxt, sessionName, trainerName, toMin } from './ui-common.js';
 
 const XLSX_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
 const FILE_BASE = 'periscope-schedule';
@@ -41,11 +41,11 @@ function summaryRows(result, config) {
   rows.push(['סה"כ שעות אימון', '', '', (result.summary?.totalMinutes || 0) / 60]);
   rows.push(['ניצול', '', '', Math.round((result.summary?.utilization || 0) * 100) + '%']);
   rows.push([]);
-  rows.push(['מאמנת', 'ימים זמינים', '', 'שעות בשבוע']);
+  rows.push(['מאמנת', 'זמינות', '', 'שעות בשבוע']);
   for (const t of config.trainers) {
     const p = result.summary?.perTrainer?.[t.id];
     const m = p?.minutes ?? (result.summary?.perTrainerDay?.[t.id] || []).reduce((a, b) => a + b, 0);
-    rows.push([t.name, (t.days || [0, 1, 2, 3, 4]).map(d => DAY_NAMES[d]).join(' '), '', m / 60]);
+    rows.push([t.name, Object.keys(availMap(t)).map(Number).sort().map(d => `${DAY_NAMES[d]} ${availText(t, d)}`).join(' · '), '', m / 60]);
   }
   if (result.warnings?.length) { rows.push([]); rows.push(['הערות']); result.warnings.forEach(w => rows.push([w])); }
   return rows;
@@ -150,7 +150,7 @@ export async function renderPNG(result, config) {
     ctx.fillStyle = color; ctx.fillRect(x, top + s * ppm, laneW, l * ppm);
     if (striped) { ctx.fillStyle = 'rgba(0,0,0,.35)'; for (let y = 0; y < l * ppm; y += 8) ctx.fillRect(x, top + s * ppm + y, laneW, 3); }
   };
-  trainers.forEach((t, i) => (t.days ? [0, 1, 2, 3, 4].filter(d => !t.days.includes(d)) : []).forEach(d => lane(d, 0, 1440, i, '#0b131a', false)));
+  trainers.forEach((t, i) => [0, 1, 2, 3, 4].forEach(d => offSegments(t, d).forEach(([s, l]) => lane(d, s, l, i, '#0b131a', false))));
   (result.sleep || []).forEach(sl => seg(sl.start, sl.end, (d, s, l) => lane(d, s, l, tIdx[sl.trainerId] ?? 0, '#4f6b84', true)));
   if (result.after?.start != null) seg(result.after.start, result.after.end, (d, s, l) => lane(d, s, l, tIdx[result.after.trainerId] ?? 0, '#f0962e', true));
 
