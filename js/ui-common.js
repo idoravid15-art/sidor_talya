@@ -51,17 +51,28 @@ export function availMap(t) {
   return Object.fromEntries(ds.map(d => [d, null]));
 }
 export const availDays = t => Object.keys(availMap(t)).map(Number).filter(d => d >= 0 && d <= 4).sort();
-// unavailable [start, length] segments (minutes of day) for day d
-export function offSegments(t, d) {
+export const CROSS_MAX = 240; // ranges may continue past midnight until 04:00
+export const isCross = r => !!r && (toMin(r.to) || 1440) <= toMin(r.from);
+// absolute [start, end) intervals; a range with to < from ends on the next day
+export function availIntervals(t) {
   const m = availMap(t);
-  if (!(d in m)) return [[0, 1440]];
-  const r = m[d]; if (!r) return [];
-  const a = toMin(r.from), b = toMin(r.to) || 1440, out = [];
-  if (a > 0) out.push([0, a]);
-  if (b < 1440) out.push([b, 1440 - b]);
+  return Object.keys(m).map(Number).map(d => {
+    const r = m[d], base = d * 1440;
+    if (!r) return [base, base + 1440];
+    const a = toMin(r.from), b = toMin(r.to) || 1440;
+    return [base + a, base + (b > a ? b : 1440 + b)];
+  }).sort((x, y) => x[0] - y[0]);
+}
+// unavailable [start, length] segments (minutes of day) for day d (ranges from the previous night included)
+export function offSegments(t, d) {
+  const lo = d * 1440, hi = lo + 1440;
+  const iv = availIntervals(t).map(([a, b]) => [Math.max(a, lo), Math.min(b, hi)]).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+  const out = []; let cur = lo;
+  for (const [a, b] of iv) { if (a > cur) out.push([cur - lo, a - cur]); cur = Math.max(cur, b); }
+  if (cur < hi) out.push([cur - lo, hi - cur]);
   return out;
 }
-export const availText = (t, d) => { const r = availMap(t)[d]; return r ? `${r.from}-${r.to}` : 'כל היום'; };
+export const availText = (t, d) => { const r = availMap(t)[d]; return r ? `${r.from}-${r.to}${isCross(r) ? ' (למחרת)' : ''}` : 'כל היום'; };
 export function timeOptions(from = 0, to = 1410, step = 30) {
   const out = [];
   for (let m = from; m <= to; m += step) out.push(m === 1440 ? '24:00' : hhmm(m));

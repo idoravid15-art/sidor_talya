@@ -1,5 +1,5 @@
 // Weekly board renderer (DOM). Desktop: 5 day columns + time axis. Mobile: swipe/tabs per day.
-import { availMap, offSegments, DAY_NAMES, typeColor, hhmm, rng, hoursTxt, esc, sessionName, trainerName, toMin } from './ui-common.js';
+import { availMap, availText, offSegments, DAY_NAMES, typeColor, hhmm, rng, hoursTxt, esc, sessionName, trainerName, toMin } from './ui-common.js';
 
 const DAY = 1440;
 
@@ -74,7 +74,7 @@ export function renderBoard(boardEl, tabsEl, result, config) {
   trainers.forEach((t, i) => {
     for (let d = 0; d < 5; d++) {
       const r = availMap(t)[d];
-      const lbl = d in availMap(t) ? `${t.name} זמינה ביום ${DAY_NAMES[d]} רק ${r ? r.from + '-' + r.to : ''}` : `${t.name} לא זמינה ביום ${DAY_NAMES[d]}`;
+      const lbl = d in availMap(t) ? `${t.name} זמינה ביום ${DAY_NAMES[d]} רק ${r ? availText(t, d) : ''}` : `${t.name} לא זמינה ביום ${DAY_NAMES[d]}`;
       offSegments(t, d).forEach(([s, l], k) => cols[d].lanes[i].unshift(
         `<div class="unavail" role="listitem" style="top:calc(${s}px * var(--ppm));height:calc(${l}px * var(--ppm))" title="${esc(lbl)}">${k ? '' : `<span class="sr-only">${esc(lbl)}</span>`}</div>`));
     }

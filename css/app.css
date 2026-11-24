@@ -214,6 +214,10 @@ input:focus-visible, select:focus-visible { border-color: var(--focus); }
 .hrs-day { min-width: 3.6em; font-size: .88rem; color: var(--muted); font-weight: 600; }
 .hrs-row select { width: auto; min-width: 0; flex: 0 1 auto; padding-block: 6px; padding-inline: 10px 30px; background-position: left 10px center; }
 .hrs-row .dash { color: var(--dim); }
+.hrs-msgs { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 4px; font-size: .84rem; }
+.hrs-msgs li { display: flex; gap: 6px; align-items: baseline; }
+.hrs-msgs .warn { color: var(--muted); } .hrs-msgs .warn span { color: var(--orange); font-weight: 800; }
+.hrs-msgs .error { color: var(--bad); font-weight: 600; }
 .hrs-range { display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap; justify-self: start; }
 .hrs-row select { font-size: .92rem; padding-inline: 8px 26px; background-position: left 8px center; }
 .field-label { margin: 14px 0 0; font-size: .9rem; color: var(--muted); font-weight: 500; }

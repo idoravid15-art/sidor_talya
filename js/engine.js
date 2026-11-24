@@ -154,7 +154,10 @@ export function normAvailability(t) {
       if (!okDay(d)) continue;
       if (v && v.from != null && v.to != null) {
         const a = parseHM(v.from), b = parseHM(v.to) || 1440;
-        out[d] = a === 0 && b >= 1440 ? null : b > a ? { from: v.from, to: b >= 1440 ? '24:00' : v.to } : null;
+        if (a === 0 && b >= 1440) out[d] = null;
+        else if (b > a) out[d] = { from: v.from, to: b >= 1440 ? '24:00' : v.to };
+        // to < from: continues into the next day, at most until CROSS_MAX (04:00)
+        else out[d] = { from: v.from, to: fmt(Math.min(b, CROSS_MAX)) };
       } else out[d] = null;
     }
     return out;
@@ -163,14 +166,53 @@ export function normAvailability(t) {
   for (const d of days) out[d] = null;
   return out;
 }
+export const CROSS_MAX = 240; // a range may run past midnight until 04:00 of the next day
 const availMap = (t) => (t.availability && typeof t.availability === 'object' ? t.availability : normAvailability(t));
 const availOn = (t, d) => d in availMap(t);
-// [start, end) minutes-of-day the trainer may teach on day d, or null when unavailable
-function dayRange(t, d) {
-  const m = availMap(t);
-  if (!(d in m)) return null;
-  const r = m[d];
-  return r ? [parseHM(r.from), parseHM(r.to) || 1440] : [0, 1440];
+// absolute [start, end) intervals the trainer may teach in (a range with to < from ends on the next day)
+export function availIntervals(t) {
+  const m = availMap(t), out = [];
+  for (const k of Object.keys(m)) {
+    const d = Number(k), r = m[k], base = d * 1440;
+    if (!r) { out.push([base, base + 1440]); continue; }
+    const a = parseHM(r.from), b = parseHM(r.to) || 1440;
+    out.push([base + a, base + (b > a ? b : 1440 + b)]);
+  }
+  return out.sort((x, y) => x[0] - y[0]);
+}
+const inIntervals = (iv, a, b) => iv.some(([x, y]) => x <= a && b <= y) ||
+  // a piece may span two touching intervals (e.g. all-day Mon + range from 00:00 Tue)
+  (() => { for (let m = a; m < b; m += 30) if (!iv.some(([x, y]) => x <= m && Math.min(m + 30, b) <= y)) return false; return true; })();
+const rangeLabel = (r) => (r ? `${r.from}-${r.to}${parseHM(r.to) && parseHM(r.to) < parseHM(r.from) ? ' (למחרת)' : ''}` : 'כל היום');
+
+// pre-build check of trainer availability: [{ level:'error'|'warn', trainerId, day, message }]
+export function checkAvailability(config) {
+  const cfg = normalizeConfig(config), R = cfg.rules, out = [];
+  const swe = parseHM(R.sleepWindowEnd), sws = parseHM(R.sleepWindowStart); // e.g. 12:00, 20:00
+  for (const t of cfg.trainers) {
+    const m = t.availability;
+    for (const k of Object.keys(m)) {
+      const d = Number(k), r = m[k];
+      if (!r) continue;
+      const a = parseHM(r.from), b = parseHM(r.to) || 1440;
+      if (b > a) continue;
+      if ((d + 1) * 1440 + b > R.weekEnd) {
+        out.push({ level: 'error', trainerId: t.id, day: d, message: `${t.name}: ביום ${DAY_NAMES[d]} הטווח לא יכול לעבור את סוף השבוע (${fmt(R.weekEnd)})` });
+        continue;
+      }
+      // sleep after a late end: an 8h block must start by the end of the late range and finish by sleepWindowEnd
+      const latestSleep = (swe - R.sleepMinutes + 1440) % 1440;
+      if ((d + 1) in m && b > latestSleep && b < sws) {
+        out.push({ level: 'error', trainerId: t.id, day: d, message: `${t.name}: עבודה עד ${r.to} בלילה שבין ${DAY_NAMES[d]} ל${DAY_NAMES[d + 1]} לא משאירה ${R.sleepMinutes / 60} שעות שינה רצופות עד ${R.sleepWindowEnd}` });
+        continue;
+      }
+      if ((d + 1) in m) {
+        const n = m[d + 1], ns = n ? parseHM(n.from) : 0, need = b + R.sleepMinutes;
+        if (ns < need) out.push({ level: 'warn', trainerId: t.id, day: d, message: `${t.name}: אם תאמן עד ${r.to} בלילה שבין ${DAY_NAMES[d]} ל${DAY_NAMES[d + 1]}, השינה (${R.sleepMinutes / 60} ש' ברצף) תסתיים רק ב-${fmt(need)}, ולכן ב${DAY_NAMES[d + 1]} לא תאמן לפני ${fmt(need)}. המנוע יאזן בין השניים.` });
+      }
+    }
+  }
+  return out;
 }
 
 // ---------- context ----------
@@ -248,10 +290,10 @@ function buildCtx(cfg) {
   const availDays = avail.map((a) => a.slice(0, D).filter(Boolean).length);
   const availMin = cfg.trainers.map(() => 0);
   const baseHard = cfg.trainers.map((t, tr) => {
-    const h = new Uint8Array(N);
+    const h = new Uint8Array(N), iv = availIntervals(t);
     for (let s = 0; s < N; s++) {
-      const m = ws + s * slot, tod = m % 1440, r = dayRange(t, dayOfSlot[s]);
-      if (!r || tod < r[0] || tod + slot > r[1]) h[s] = 4; else availMin[tr] += slot;
+      const m = ws + s * slot;
+      if (!iv.some(([x, y]) => x <= m && m + slot <= y)) h[s] = 4; else availMin[tr] += slot;
     }
     return h;
   });
@@ -897,11 +939,14 @@ export function validate(config, result) {
   }
   for (const tr of cfg.trainers) {
     const mine = S.filter((s) => s.trainerId === tr.id);
-    for (const s of mine) for (let d = Math.floor(s.start / 1440); d * 1440 < s.end; d++) {
-      const r = dayRange(tr, d);
-      if (!r) { push('unavailable', `${tr.name} לא זמינה ביום ${DAY_NAMES[d]} אך משובצת: ${desc(s)}`, { sessionIds: [s.id], trainerId: tr.id }); break; }
-      const a = Math.max(s.start, d * 1440) - d * 1440, b = Math.min(s.end, (d + 1) * 1440) - d * 1440;
-      if (a < r[0] || b > r[1]) { push('unavailable', `${tr.name} זמינה ביום ${DAY_NAMES[d]} רק ${fmt(r[0])}-${r[1] >= 1440 ? '24:00' : fmt(r[1])}, אך משובצת: ${desc(s)}`, { sessionIds: [s.id], trainerId: tr.id }); break; }
+    const iv = availIntervals(tr);
+    for (const s of mine) {
+      if (inIntervals(iv, s.start, s.end)) continue;
+      const d = Math.floor(s.start / 1440), m = tr.availability;
+      const txt = Object.keys(m).map(Number).filter((x) => x === d || x === d - 1).map((x) => `${DAY_NAMES[x]} ${rangeLabel(m[x])}`).join(', ');
+      push('unavailable', txt
+        ? `${tr.name} זמינה רק ${txt}, אך משובצת: ${desc(s)}`
+        : `${tr.name} לא זמינה ביום ${DAY_NAMES[d]} אך משובצת: ${desc(s)}`, { sessionIds: [s.id], trainerId: tr.id });
     }
     for (let i = 1; i < mine.length; i++) {
       const gap = mine[i].start - mine[i - 1].end;

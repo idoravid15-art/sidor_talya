@@ -3,7 +3,7 @@ import * as engine from './engine.js';
 const { DEFAULT_CONFIG, fmt } = engine;
 const MAX_TRAINERS = engine.MAX_TRAINERS || 5;
 const LETTERS = ['א', 'ב', 'ג', 'ד', 'ה'];
-import { availMap, DAY_NAMES, DAY_SHORT, typeColor, toMin, hhmm, rng, hoursTxt, esc, sessionName, trainerName, timeOptions } from './ui-common.js';
+import { availMap, isCross, CROSS_MAX, DAY_NAMES, DAY_SHORT, typeColor, toMin, hhmm, rng, hoursTxt, esc, sessionName, trainerName, timeOptions } from './ui-common.js';
 import { renderBoard, renderLegend } from './board.js';
 import { exportPrint, exportPNG, exportExcel } from './exports.js';
 
@@ -62,7 +62,7 @@ function migrateTrainers(saved) {
     if (id === 't1' && name === LEGACY_T1) name = DEFAULT_CONFIG.trainers[0].name;
     // availability by day/hours; legacy `days` arrays become all-day entries
     const src = availMap(t || {}), availability = {};
-    for (const [k, v] of Object.entries(src)) if (ALL_DAYS.includes(+k)) availability[+k] = v && v.from && v.to && toMin(v.from) < (toMin(v.to) || 1440) ? { from: v.from, to: v.to } : null;
+    for (const [k, v] of Object.entries(src)) if (ALL_DAYS.includes(+k)) availability[+k] = v && v.from && v.to && (toMin(v.from) < (toMin(v.to) || 1440) || toMin(v.to) <= CROSS_MAX) ? { from: v.from, to: v.to } : null;
     if (!Object.keys(availability).length) ALL_DAYS.forEach(d => (availability[d] = null));
     return { id, name, isManager: 'isManager' in (t || {}) ? !!t.isManager : id === 't1', availability };
   });
@@ -396,8 +396,10 @@ function initSettings() {
     const av = t.availability ||= availMap(t);
     if (e.target.dataset.h === 'mode') av[d] = e.target.value === 'range' ? { from: '08:00', to: '16:00' } : null;
     else {
-      const from = row.querySelector('[data-h=from]').value, to = row.querySelector('[data-h=to]').value;
-      if (toMin(from) >= (toMin(to) || 1440)) { $('#trainerHint').textContent = 'שעת הסיום צריכה להיות אחרי שעת ההתחלה.'; e.target.value = e.target.dataset.h === 'from' ? av[d].from : av[d].to; return; }
+      const from = row.querySelector('[data-h=from]').value;
+      let to = row.querySelector('[data-h=to]').value;
+      // a new start may invalidate the end: keep it when still valid, else 8 hours later (max 24:00)
+      if (!validTo(from, to, d)) { const e2 = Math.min(toMin(from) + 480, 1440); to = e2 === 1440 ? '24:00' : hhmm(e2); }
       av[d] = { from, to };
     }
     $('#trainerHint').textContent = '';
@@ -455,15 +457,23 @@ function syncTexts() {
   $('#thuTradeTxt').textContent = tw.tradeoffMinutes;
 }
 const defaultName = i => (i === 0 ? DEFAULT_CONFIG.trainers[0].name : `מאמנת ${LETTERS[i] || i + 1}`);
+// "to" choices for a start time: later the same day (until 24:00), then 00:30…04:00 of the next day (not on the last day)
+function toChoices(from, d) {
+  const f = toMin(from), out = timeOptions(f + 30, 1440).map(x => [x, x]);
+  if (d < 4) for (let m = 30; m <= CROSS_MAX && m < f; m += 30) out.push([hhmm(m), `${hhmm(m)} (למחרת)`]);
+  return out;
+}
+const validTo = (from, to, d) => toChoices(from, d).some(([v]) => v === to);
 function hoursRows(t) {
-  const av = availMap(t), from = timeOptions(0, 1410), to = timeOptions(30, 1440);
-  const opts = (arr, v) => arr.map(x => `<option ${x === v ? 'selected' : ''}>${x}</option>`).join('');
+  const av = availMap(t), from = timeOptions(0, 1410);
+  const opts = (arr, v) => arr.map(x => (Array.isArray(x) ? x : [x, x])).map(([x, l]) => `<option value="${x}" ${x === v ? 'selected' : ''}>${l}</option>`).join('');
+  const issues = engine.checkAvailability ? engine.checkAvailability({ ...cfg(), trainers: [t] }) : [];
   return Object.keys(av).map(Number).filter(d => ALL_DAYS.includes(d)).sort().map(d => {
     const r = av[d], lbl = `${t.name}, ${DAY_NAMES[d]}`;
     return `<div class="hrs-row" data-d="${d}"><span class="hrs-day" aria-hidden="true">${DAY_NAMES[d]}</span>
       <select data-h="mode" aria-label="שעות זמינות: ${esc(lbl)}"><option value="all" ${r ? '' : 'selected'}>כל היום</option><option value="range" ${r ? 'selected' : ''}>שעות…</option></select>
-      ${r ? `<span class="hrs-range"><select data-h="from" aria-label="מ-, ${esc(lbl)}">${opts(from, r.from)}</select><span class="dash" aria-hidden="true">–</span><select data-h="to" aria-label="עד, ${esc(lbl)}">${opts(to, r.to)}</select></span>` : ''}</div>`;
-  }).join('');
+      ${r ? `<span class="hrs-range"><select data-h="from" aria-label="מ-, ${esc(lbl)}">${opts(from, r.from)}</select><span class="dash" aria-hidden="true">–</span><select data-h="to" aria-label="עד, ${esc(lbl)}">${opts(toChoices(r.from, d), r.to)}</select></span>` : ''}</div>`;
+  }).join('') + (issues.length ? `<ul class="hrs-msgs">${issues.map(x => `<li class="${x.level}"><span aria-hidden="true">${x.level === 'error' ? '✕' : '!'}</span> ${esc(x.message)}</li>`).join('')}</ul>` : '');
 }
 function renderTrainers(focusSel) {
   const c = cfg(), owner = afterOwner(c), one = c.trainers.length <= 1;
@@ -519,6 +529,13 @@ function build({ fresh = false } = {}) {
   if (fresh) state.seed = (Math.floor(Math.random() * 1e9) >>> 0) || 1;
   const config = clone(cfg());
   const key = cfgKey();
+  const avErr = (engine.checkAvailability ? engine.checkAvailability(config) : []).filter(x => x.level === 'error');
+  if (avErr.length) {
+    building = false;
+    $('#buildStatus').textContent = 'אי אפשר לבנות: ' + avErr.map(x => x.message).join(' · ');
+    renderResult({ error: 'יש לתקן את זמינות המאמנות בהגדרות: ' + avErr[0].message });
+    return;
+  }
   $('#scan').hidden = false; $('#result').hidden = true; $('#emptyState').hidden = true;
   $('#buildBtn').disabled = true; $$('#exportGroup .btn').forEach(b => (b.disabled = true));
   $('#buildStatus').textContent = 'בונה לו"ז, נא להמתין…';

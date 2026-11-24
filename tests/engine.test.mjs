@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { solve, validate, DEFAULT_CONFIG, fmt, dayOf, parseHM, normalizeConfig } from '../js/engine.js';
+import { solve, validate, DEFAULT_CONFIG, fmt, dayOf, parseHM, normalizeConfig, availIntervals, checkAvailability } from '../js/engine.js';
 
 const OPTS = { seed: 42, timeBudgetMs: 400 };
 function cfgWith(hours, patch = {}) {
@@ -36,13 +36,10 @@ function checkHard(cfg, r) {
     });
   }
   // availability: only inside the trainer's day/hour ranges
-  for (const tr of ncfg.trainers) for (const s of r.sessions.filter((x) => x.trainerId === tr.id)) {
-    for (let d = Math.floor(s.start / 1440); d * 1440 < s.end; d++) {
-      assert.ok(d in tr.availability, `${tr.id} on day ${d}`);
-      const rg = tr.availability[d];
-      if (!rg) continue;
-      const a = Math.max(s.start, d * 1440) - d * 1440, b = Math.min(s.end, (d + 1) * 1440) - d * 1440;
-      assert.ok(a >= parseHM(rg.from) && b <= (parseHM(rg.to) || 1440), `${tr.id} outside hours on day ${d}`);
+  for (const tr of ncfg.trainers) {
+    const iv = availIntervals(tr);
+    for (const s of r.sessions.filter((x) => x.trainerId === tr.id)) {
+      for (let m = s.start; m < s.end; m += 30) assert.ok(iv.some(([a, b]) => a <= m && m + 30 <= b), `${tr.id} outside availability at ${m}`);
     }
   }
   // after always on the configured (default: manager) trainer
@@ -348,4 +345,56 @@ test('hour ranges: validate catches injected violation; fixed session outside ra
   const bad = structuredClone(r2);
   bad.sessions.push({ id: 'x', typeId: null, label: 'x', trainerId: 't2', start: 1440 + 1080, end: 1440 + 1140, fixed: true });
   assert.ok(validate(c2, bad).some((v) => v.code === 'unavailable'));
+});
+
+// ---------- ranges past midnight ----------
+const LATE = { 0: null, 1: null, 2: { from: '16:00', to: '02:00' }, 3: { from: '10:00', to: '24:00' }, 4: null };
+test('range crossing midnight: normalized, respected, sleep still 8h after it', () => {
+  const n = normalizeConfig({ trainers: [{ id: 't1', name: 'א', availability: { 2: { from: '16:00', to: '02:00' }, 3: { from: '20:00', to: '07:00' } } }] });
+  assert.deepEqual(n.trainers[0].availability[2], { from: '16:00', to: '02:00' });
+  assert.equal(n.trainers[0].availability[3].to, '04:00'); // capped at 04:00 next day
+  assert.deepEqual(availIntervals(n.trainers[0]), [[2 * 1440 + 960, 3 * 1440 + 120], [3 * 1440 + 1200, 4 * 1440 + 240]]);
+  const c = cfgWith(OVER);
+  c.trainers[1].availability = LATE;
+  const r = solve(c, { seed: 5, timeBudgetMs: 1500 });
+  checkHard(c, r); // availability, sleep >= 8h inside 20:00-12:00, caps, breaks
+  // she works after midnight on Wednesday (overload pushes into the night) and still sleeps 8h before Wednesday's range
+  const late = r.sessions.filter((s) => s.trainerId === 't2' && s.start >= 3 * 1440 && s.end <= 3 * 1440 + 120);
+  assert.ok(late.length > 0, 'uses the late window');
+  const sl = r.sleep.find((z) => z.trainerId === 't2' && z.start >= 2 * 1440 + 1200 && z.start <= 3 * 1440 + 240);
+  assert.ok(sl && sl.end - sl.start === 480 && sl.start >= Math.max(...late.map((s) => s.end)));
+});
+
+test('daily cap is split at midnight for a crossing range', () => {
+  const c = cfgWith(OVER);
+  c.trainers[1].availability = LATE;
+  const r = solve(c, { seed: 5, timeBudgetMs: 1500 });
+  const exp = [0, 0, 0, 0, 0];
+  for (const s of r.sessions.filter((x) => x.trainerId === 't2')) {
+    for (let m = s.start; m < s.end; m += 30) exp[Math.floor(m / 1440)] += 30;
+  }
+  assert.deepEqual(r.summary.perTrainerDay.t2, exp);
+  for (const m of exp) assert.ok(m <= c.rules.dailyMaxSoft);
+});
+
+test('crossing range: validate catches violation; pre-build check', () => {
+  const c = cfgWith(LIGHT);
+  c.trainers[1].availability = LATE;
+  const r = solve(c, OPTS);
+  checkHard(c, r);
+  const ok = structuredClone(r);
+  ok.sessions = ok.sessions.filter((s) => s.start >= 3 * 1440 + 180 || s.end <= 3 * 1440 - 60);
+  ok.sessions.push({ id: 'in', typeId: null, label: 'x', trainerId: 't2', start: 3 * 1440, end: 3 * 1440 + 90, fixed: true });
+  assert.ok(!validate(c, ok).some((v) => v.code === 'unavailable' && v.sessionIds[0] === 'in'));
+  const bad = structuredClone(ok);
+  bad.sessions.find((s) => s.id === 'in').end = 3 * 1440 + 150; // until 02:30, range ends 02:00
+  const v = validate(c, bad).find((x) => x.code === 'unavailable');
+  assert.ok(v && v.message.includes('16:00-02:00'), v && v.message);
+  // pre-build: Thursday may not pass weekEnd; late end before an early next start warns
+  const c2 = cfgWith(LIGHT);
+  c2.trainers[1].availability = { 0: null, 1: { from: '18:00', to: '03:00' }, 2: { from: '06:00', to: '16:00' }, 4: { from: '20:00', to: '01:00' } };
+  const chk = checkAvailability(c2);
+  assert.ok(chk.some((x) => x.level === 'error' && x.day === 4));
+  assert.ok(chk.some((x) => x.level === 'warn' && x.day === 1 && x.message.includes('11:00')));
+  assert.deepEqual(checkAvailability(cfgWith(LIGHT)), []);
 });
